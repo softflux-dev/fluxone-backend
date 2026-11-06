@@ -115,9 +115,8 @@ export const POINT_SYSTEMS = {
 export const STAFF_STATUS = {
   ACTIVE: 'active',
   INACTIVE: 'inactive',
-  BRANCH_BLOCKED: 'branch_blocked',
   OPEN: 'active',
-  BLOCKED: 'inactive', // legacy alias for manual off — keep if UI still sends "blocked"
+  BLOCKED: 'inactive',
 }
 
 export const BRANCH_STATUS = {

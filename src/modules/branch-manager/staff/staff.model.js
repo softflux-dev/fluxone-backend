@@ -43,7 +43,7 @@ async function assertSingleInventoryManager(
       WHERE s.tenant_id = $1
         AND s.branch_id = $2
         AND r.slug = $3
-        AND s.status NOT IN ('inactive', 'blocked', 'branch_blocked')
+        AND s.status NOT IN ('inactive', 'blocked')
         AND u.is_active = true
         AND ($4::uuid IS NULL OR s.id <> $4)
       LIMIT 1

@@ -99,7 +99,7 @@ export async function listActiveAllocationsForDevices(
       AND a.branch_id = $2
       AND a.status = 'active'
       AND a.hardware_id = ANY($3::uuid[])
-      AND s.status NOT IN ('inactive', 'blocked', 'branch_blocked')
+      AND s.status NOT IN ('inactive', 'blocked')
       AND ($4::uuid IS NULL OR a.staff_id <> $4)
     ${lockClause}
   `

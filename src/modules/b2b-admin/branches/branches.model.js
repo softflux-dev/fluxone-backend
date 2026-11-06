@@ -1,18 +1,12 @@
 import crypto from 'crypto'
 import { tenantClientQuery, tenantQuery, withTransaction } from '../../../config/db.js'
-import { ROLE_IDS, ROLES, BRANCH_STATUS, STAFF_STATUS } from '../../../config/constants.js'
+import { ROLE_IDS, ROLES, BRANCH_STATUS } from '../../../config/constants.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
 import {
   displayRefSearchHex,
   normalizeSearchQuery,
 } from '../../../utils/displayRef.util.js'
 import { revokeForBranch } from '../../auth/auth_sessions.model.js'
-
-const IM_ROLE_ID = ROLE_IDS[ROLES.INVENTORY_MANAGER]
-const BM_ROLE_ID = ROLE_IDS[ROLES.BRANCH_MANAGER]
-
-const REOPEN_MULTI_IM_MESSAGE =
-  'Cannot reopen this branch: more than one Inventory Manager would become active. Keep only one Inventory Manager active for this branch, then try again.'
 
 function httpError(status, message) {
   const error = new Error(message)
@@ -21,12 +15,10 @@ function httpError(status, message) {
 }
 
 function mapPgUniqueViolation(err, message) {
-  if (err?.code !== '23505') throw err
-  const constraint = String(err.constraint || '')
-  if (constraint.includes('uq_one_active_im_per_branch')) {
-    throw httpError(409, REOPEN_MULTI_IM_MESSAGE)
+  if (err?.code === '23505') {
+    throw httpError(409, message)
   }
-  throw httpError(409, message || 'This change conflicts with an existing record.')
+  throw err
 }
 
 //Readable temp password: meets login min length (8), easy to type once from email/logs.
@@ -421,133 +413,95 @@ export async function updateBranch(tenantId, id, payload) {
 }
 
 // Soft-block / reopen a branch. Never deletes rows — only flips access flags.
-// Block: branch users lose login; active staff → branch_blocked (manual inactive untouched).
-// Open: only branch_blocked → active; re-enable BM + users with active staff.
-// At most one Inventory Manager is re-activated (unique index uq_one_active_im_per_branch).
+// Block: all branch users lose login (web + POS); active staff marked status='blocked'.
+// Open: restore staff that were branch-blocked; re-enable BM + users linked to active staff.
+// Manually inactive staff stay inactive on reopen.
 export async function setBranchStatus(tenantId, id, status) {
-  let row
-  try {
-    row = await withTransaction(async (client) => {
-      const existing = await getBranchByIdInTx(client, tenantId, id)
-      if (!existing) throw httpError(404, 'Branch not found')
+  const row = await withTransaction(async (client) => {
+    const existing = await getBranchByIdInTx(client, tenantId, id)
+    if (!existing) throw httpError(404, 'Branch not found')
 
+    await tenantClientQuery(
+      client,
+      tenantId,
+      `
+        UPDATE branches
+        SET status = $3
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [id, status],
+    )
+
+    if (status === BRANCH_STATUS.BLOCKED) {
+      // Mark currently-active staff as branch-blocked (keep manual 'inactive' distinct).
       await tenantClientQuery(
         client,
         tenantId,
-        `UPDATE branches SET status = $3 WHERE tenant_id = $1 AND id = $2`,
-        [id, status],
+        `
+          UPDATE staff
+          SET status = 'inactive'
+          WHERE tenant_id = $1
+            AND branch_id = $2
+            AND status = 'active'
+        `,
+        [id],
       )
 
-      if (status === BRANCH_STATUS.BLOCKED) {
-        await tenantClientQuery(
-          client,
-          tenantId,
-          `
-            UPDATE staff
-            SET status = $3
-            WHERE tenant_id = $1
-              AND branch_id = $2
-              AND status = $4
-          `,
-          [id, STAFF_STATUS.BRANCH_BLOCKED, STAFF_STATUS.ACTIVE],
-        )
+      // Deactivate every login under this branch (BM, IM, cashier, other roles).
+      await tenantClientQuery(
+        client,
+        tenantId,
+        `
+          UPDATE users
+          SET is_active = false
+          WHERE tenant_id = $1
+            AND branch_id = $2
+        `,
+        [id],
+      )
+    } else {
+      // Restore only staff that were soft-blocked by this branch action.
+      await tenantClientQuery(
+        client,
+        tenantId,
+        `
+          UPDATE staff
+          SET status = 'active'
+          WHERE tenant_id = $1
+            AND branch_id = $2
+            AND status = 'inactive'
+        `,
+        [id],
+      )
 
-        await tenantClientQuery(
-          client,
-          tenantId,
-          `
-            UPDATE users
-            SET is_active = false
-            WHERE tenant_id = $1
-              AND branch_id = $2
-          `,
-          [id],
-        )
-      } else {
-        // Manual inactive stays inactive
-        await tenantClientQuery(
-          client,
-          tenantId,
-          `
-            UPDATE staff
-            SET status = $3
-            WHERE tenant_id = $1
-              AND branch_id = $2
-              AND status = $4
-          `,
-          [id, STAFF_STATUS.ACTIVE, STAFF_STATUS.BRANCH_BLOCKED],
-        )
-
-        // BM + non-IM staff with active staff row (avoids multi-IM unique clash in one UPDATE)
-        await tenantClientQuery(
-          client,
-          tenantId,
-          `
-            UPDATE users u
-            SET is_active = true
-            WHERE u.tenant_id = $1
-              AND u.branch_id = $2
-              AND (
-                u.role_id = $3
-                OR (
-                  u.role_id IS DISTINCT FROM $4
-                  AND EXISTS (
-                    SELECT 1
-                    FROM staff s
-                    WHERE s.tenant_id = u.tenant_id
-                      AND s.user_id = u.id
-                      AND s.status = $5
-                  )
-                )
+      // Re-enable BM always; re-enable other roles only when their staff row is active again.
+      await tenantClientQuery(
+        client,
+        tenantId,
+        `
+          UPDATE users u
+          SET is_active = true
+          WHERE u.tenant_id = $1
+            AND u.branch_id = $2
+            AND (
+              u.role_id = ${ROLE_IDS[ROLES.BRANCH_MANAGER]}
+              OR EXISTS (
+                SELECT 1
+                FROM staff s
+                WHERE s.tenant_id = u.tenant_id
+                  AND s.user_id = u.id
+                  AND s.status = 'active'
               )
-          `,
-          [id, BM_ROLE_ID, IM_ROLE_ID, STAFF_STATUS.ACTIVE],
-        )
+            )
+        `,
+        [id],
+      )
+    }
 
-        // Re-enable at most one Inventory Manager for this branch
-        await tenantClientQuery(
-          client,
-          tenantId,
-          `
-            UPDATE users u
-            SET is_active = true
-            WHERE u.tenant_id = $1
-              AND u.id = (
-                SELECT u2.id
-                FROM users u2
-                WHERE u2.tenant_id = $1
-                  AND u2.branch_id = $2
-                  AND u2.role_id = $3
-                  AND u2.is_active = false
-                  AND EXISTS (
-                    SELECT 1
-                    FROM staff s
-                    WHERE s.tenant_id = u2.tenant_id
-                      AND s.user_id = u2.id
-                      AND s.status = $4
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM users x
-                    WHERE x.tenant_id = u2.tenant_id
-                      AND x.branch_id = u2.branch_id
-                      AND x.role_id = $3
-                      AND x.is_active = true
-                  )
-                ORDER BY u2.created_at ASC NULLS LAST, u2.id ASC
-                LIMIT 1
-              )
-          `,
-          [id, IM_ROLE_ID, STAFF_STATUS.ACTIVE],
-        )
-      }
+    return getBranchByIdInTx(client, tenantId, id)
+  })
 
-      return getBranchByIdInTx(client, tenantId, id)
-    })
-  } catch (err) {
-    mapPgUniqueViolation(err, REOPEN_MULTI_IM_MESSAGE)
-  }
-
+  // Drop open web/desktop sessions so blocked users cannot keep calling APIs.
   if (status === BRANCH_STATUS.BLOCKED) {
     await revokeForBranch(tenantId, id)
   }

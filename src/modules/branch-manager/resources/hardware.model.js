@@ -251,7 +251,7 @@ export async function getHardwareById(tenantId, id, { branchId } = {}) {
       LEFT JOIN staff s
         ON s.tenant_id = h.tenant_id
        AND s.hardware_device_id = h.id::text
-       AND s.status NOT IN ('inactive', 'blocked', 'branch_blocked')
+       AND s.status NOT IN ('inactive', 'blocked')
       LEFT JOIN users u
         ON u.id = s.user_id
        AND u.tenant_id = s.tenant_id

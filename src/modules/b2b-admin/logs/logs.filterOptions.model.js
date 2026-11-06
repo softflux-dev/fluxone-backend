@@ -18,7 +18,7 @@ export async function listAdminLogActors(tenantId, { branchId, actorRole = null 
       WHERE s.tenant_id = $1
         AND s.branch_id = $2
         AND ($3::text IS NULL OR r.slug = $3)
-        AND s.status NOT IN ('inactive', 'blocked', 'branch_blocked')
+        AND s.status NOT IN ('inactive', 'blocked')
         AND u.is_active = true
       ORDER BY u.full_name
       LIMIT 500

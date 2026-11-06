@@ -203,8 +203,7 @@ export async function patchBranchStatus(req, res) {
     })
     return success(res, row)
   } catch (err) {
-    // 409 from multi-IM unique / validation — show err.message in UI toast (not generic 500)
-    return failFromError(res, err, 'Failed to update branch status')
+    return failFromError(res, err)
   }
 }
 
