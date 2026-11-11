@@ -29,6 +29,23 @@ import {
   getTenantCurrencyCode,
 } from '../../../utils/currency.util.js'
 
+
+
+async function getOfferLabel(client, offerId) {
+  if (!offerId) return "";
+  try {
+    const { rows } = await client.query(
+      `SELECT name, percent FROM offers WHERE id = $1`,
+      [offerId]
+    );
+    if (!rows[0]) return "";
+    return ` "${rows[0].name}" (${Number(rows[0].percent)}%)`;
+  } catch (err) {
+    console.error("getOfferLabel failed:", err.message);
+    return "";
+  }
+}
+
 /** Admin Logs — products / bundles / pricing / variants from product writes. */
 async function logProductActivity(client, tenantId, payload) {
   await writeAdminActivity(tenantId, payload, client)
@@ -64,6 +81,7 @@ export async function createCategory(tenantId, { name, parentId, imageUrl, branc
     if (!parents[0]) throw httpError(404, 'Parent category not found')
     if (!parents[0].isActive) throw httpError(409, 'Cannot add subcategory under an inactive category')
   }
+
 
   // Soft-deleted row with same name — reactivate instead of INSERT (unique index includes inactive)
   const { rows: existing } = await tenantQuery(
@@ -1190,6 +1208,7 @@ export async function createVariantProduct(tenantId, payload) {
         branchId: payload.branchId,
         actorUserId: payload.createdBy,
         category: 'products',
+        actionText: newOffer,
         action: 'product_create',
         entityType: 'product',
         entityId: parent.id,
@@ -2108,16 +2127,18 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
         const oldOffer = existing.offerId || null
         const newOffer = payload.offerId || null
         if (oldOffer !== newOffer) {
+         const newOfferText = await getOfferLabel(client, newOffer)
+         const oldOfferText = await getOfferLabel(client, oldOffer)
           await logProductActivity(client, tenantId, {
             branchId: branchIdForLog,
             actorUserId,
             category: 'pricing',
             action: newOffer ? 'offer_apply' : 'offer_remove',
+            actionText: newOffer
+        ? `Applied offer${newOfferText} to ${displayName}.`
+        : `Removed offer${oldOfferText} from ${displayName}.`,
             entityType: 'product',
             entityId: id,
-            actionText: newOffer
-              ? `Applied offer to ${displayName}.`
-              : `Removed offer from ${displayName}.`,
             affectedItem: displayName,
             details: { offerId: newOffer, previousOfferId: oldOffer },
           })
