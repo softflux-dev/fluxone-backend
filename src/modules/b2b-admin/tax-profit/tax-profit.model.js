@@ -7,8 +7,6 @@ import {
 import { findOrCreateTaxByRate } from '../../../utils/tax.util.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
 
-const SALES_WINDOW_DAYS = 30
-
 // as per company code policy — Final matches IM/POS: selling − discount + tax
 function mapProductRow(row) {
   if (!row) return null
@@ -20,6 +18,11 @@ function mapProductRow(row) {
   const finalPrice = finalPriceFromSelling(sellingPrice, discountPercent, taxPct)
   const marginAmount = actualMarginAmount(baseCost, sellingPrice)
   const marginPercent = actualMarginPercent(baseCost, sellingPrice)
+  // Final = Selling x (1 - Discount%) x (1 + Tax%): tax is charged on the discounted amount
+  const taxAmount = Math.round(sellingPrice * (1 - discountPercent / 100) * (taxPct / 100) * 100) / 100
+  const profitAmount = Math.round((finalPrice - baseCost) * 100) / 100
+  const unitsSold = Number(row.unitsSold) || 0
+  const totalRevenue = Number(row.totalRevenue) || 0
 
   return {
     id: row.id,
@@ -45,7 +48,12 @@ function mapProductRow(row) {
     taxPct,
     marginAmount,
     marginPercent,
-    salesVolume30D: Number(row.salesVolume30D) || 0,
+    taxAmount,
+    profitAmount,
+    profitPercent: baseCost > 0 ? Math.round((profitAmount / baseCost) * 10000) / 100 : 0,
+    unitsSold,
+    totalRevenue,
+    totalProfit: Math.round((totalRevenue - unitsSold * baseCost) * 100) / 100,
     finalPrice,
     status: row.status || 'open',
   }
@@ -54,13 +62,14 @@ function mapProductRow(row) {
 function sortClause(sort) {
   switch (sort) {
     case 'top_sales':
-      return 'COALESCE(sales.qty_30d, 0) DESC, p.name ASC'
+    case 'all':
+      return 'COALESCE(sales.units, 0) DESC, p.name ASC'
    case 'top_profit':
   return '(p.selling_price - p.purchase_price) / NULLIF(p.purchase_price, 0) DESC NULLS LAST, p.name ASC'
     case 'slow_moving':
-      return 'COALESCE(sales.qty_30d, 0) ASC, p.name ASC'
+      return 'COALESCE(sales.units, 0) ASC, p.name ASC'
     default:
-      return 'p.created_at DESC, p.name ASC'
+      return 'COALESCE(sales.units, 0) DESC, p.name ASC'
   }
 }
 
@@ -76,6 +85,9 @@ export async function listTaxProfitProducts(tenantId, filters = {}) {
   const productId = filters.productId || null
   const variantId = filters.variantId || null
   const sort = filters.sort || 'all'
+  // Optional sales date range (YYYY-MM-DD, inclusive); both empty = all time
+  const from = filters.from || null
+  const to = filters.to || null
 
   const { rows } = await tenantQuery(
     tenantId,
@@ -106,7 +118,8 @@ export async function listTaxProfitProducts(tenantId, filters = {}) {
         COALESCE(p.discount_percent, o.percent, 0) AS "discountPercent",
         COALESCE(p.profit_percent, 0) AS "profitPct",
         COALESCE(tax.tax_percent, 0) AS "taxPct",
-        COALESCE(sales.qty_30d, 0) AS "salesVolume30D",
+        COALESCE(sales.units, 0) AS "unitsSold",
+        COALESCE(sales.revenue, 0) AS "totalRevenue",
         count(*) OVER()::int AS "_total"
       FROM products p
       LEFT JOIN products parent
@@ -122,13 +135,15 @@ export async function listTaxProfitProducts(tenantId, filters = {}) {
         WHERE pt.tenant_id = p.tenant_id AND pt.product_id = p.id
       ) tax ON true
       LEFT JOIN LATERAL (
-        SELECT COALESCE(sum(si.quantity), 0)::numeric AS qty_30d
+        SELECT COALESCE(sum(si.quantity), 0)::numeric AS units,
+               COALESCE(sum(si.line_total), 0)::numeric AS revenue
         FROM sale_items si
         JOIN sales s ON s.id = si.sale_id AND s.tenant_id = si.tenant_id
         WHERE si.tenant_id = p.tenant_id
           AND si.product_id = p.id
           AND s.status IN ('completed', 'partial_refund')
-          AND s.sold_at >= now() - ($9::int * INTERVAL '1 day')
+          AND ($9::date IS NULL OR s.sold_at >= $9::date)
+          AND ($10::date IS NULL OR s.sold_at < ($10::date + 1))
       ) sales ON true
       WHERE p.tenant_id = $1
         AND p.status = 'active'
@@ -152,9 +167,9 @@ export async function listTaxProfitProducts(tenantId, filters = {}) {
         )
         AND ($7::uuid IS NULL OR p.id = $7)
       ORDER BY ${sortClause(sort)}
-      LIMIT $8 OFFSET $10
+      LIMIT $8 OFFSET $11
     `,
-    [q, branchId, categoryId, subcategoryId, productId, variantId, limit, SALES_WINDOW_DAYS, offset],
+    [q, branchId, categoryId, subcategoryId, productId, variantId, limit, from, to, offset],
   )
 
   const total = rows[0]?._total || 0

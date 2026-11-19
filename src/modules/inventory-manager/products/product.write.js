@@ -1208,7 +1208,6 @@ export async function createVariantProduct(tenantId, payload) {
         branchId: payload.branchId,
         actorUserId: payload.createdBy,
         category: 'products',
-        actionText: newOffer,
         action: 'product_create',
         entityType: 'product',
         entityId: parent.id,
