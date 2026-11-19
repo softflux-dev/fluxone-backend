@@ -55,8 +55,8 @@ function sortClause(sort) {
   switch (sort) {
     case 'top_sales':
       return 'COALESCE(sales.qty_30d, 0) DESC, p.name ASC'
-    case 'top_profit':
-      return 'p.profit_percent DESC, p.name ASC'
+   case 'top_profit':
+  return '(p.selling_price - p.purchase_price) / NULLIF(p.purchase_price, 0) DESC NULLS LAST, p.name ASC'
     case 'slow_moving':
       return 'COALESCE(sales.qty_30d, 0) ASC, p.name ASC'
     default:

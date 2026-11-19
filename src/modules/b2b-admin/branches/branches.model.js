@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import dns from 'node:dns/promises'
 import { tenantClientQuery, tenantQuery, withTransaction } from '../../../config/db.js'
 import { ROLE_IDS, ROLES, BRANCH_STATUS } from '../../../config/constants.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
@@ -19,6 +20,27 @@ function mapPgUniqueViolation(err, message) {
     throw httpError(409, message)
   }
   throw err
+}
+
+// Returns false only when the domain truly does not exist.
+// If DNS itself is down or times out, we don't block the admin.
+async function emailDomainExists(email) {
+  const domain = String(email || '').split('@')[1]
+  if (!domain) return false
+  const notFound = (err) => ['ENOTFOUND', 'ENODATA'].includes(err?.code)
+
+  try {
+    const mx = await dns.resolveMx(domain)
+    if (mx.length > 0) return true
+  } catch (err) {
+    if (!notFound(err)) return true
+  }
+  try {
+    const a = await dns.resolve4(domain)
+    return a.length > 0
+  } catch (err) {
+    return !notFound(err)
+  }
 }
 
 //Readable temp password: meets login min length (8), easy to type once from email/logs.
@@ -253,6 +275,12 @@ export async function getBranchById(tenantId, id) {
 
 // One transaction: branch + BM user. Caller supplies passwordHash + plaintext for email.
 export async function createBranchWithManager(tenantId, payload) {
+    if (!(await emailDomainExists(payload.manager?.email))) {
+    throw httpError(
+      400,
+      'This email is not valid or does not exist. Branch was not created.',
+    )
+  }
   try {
     return await withTransaction(async (client) => {
       // Omit workingDays → full week (matches migration default)
