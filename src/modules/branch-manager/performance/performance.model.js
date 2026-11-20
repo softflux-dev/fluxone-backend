@@ -374,6 +374,7 @@ export async function createEvaluation(
   })
 }
 
+
 export async function listRoster(tenantId, { branchId, actorUserId }) {
   const { rows } = await tenantQuery(
     tenantId,
@@ -413,7 +414,7 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
       ) p ON true
       WHERE s.tenant_id = $1
         AND s.branch_id = $2
-        AND s.status = 'active'
+        AND (s.status = 'active' OR (s.status = 'inactive' AND l.id IS NOT NULL))
         AND (r.slug IS NULL OR r.slug <> $3)
         AND ($4::uuid IS NULL OR s.user_id IS DISTINCT FROM $4::uuid)
         AND (d.name IS NULL OR d.name !~* 'branch\\s*manager')
@@ -426,9 +427,14 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
   return rows.map((row) => {
     const score = row.score == null ? null : Number(row.score)
     const previousScore = row.previousScore == null ? null : Number(row.previousScore)
+
     const delta =
-      score == null || previousScore == null ? null : round2(score - previousScore)
+      score == null || previousScore == null
+        ? null
+        : round2(score - previousScore)
+
     const trend = trendFromDelta(delta)
+
     return {
       staffId: row.staffId,
       userId: row.userId,
@@ -439,15 +445,19 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
       designation: row.designation,
       role: row.role,
       status: row.status,
+      canScore: String(row.status || '').toLowerCase() === 'active',
       score,
       rating: score,
-      ratingLabel: row.ratingLabel || (score == null ? null : ratingLabelFromScore(score)),
+      ratingLabel:
+        row.ratingLabel ||
+        (score == null ? null : ratingLabelFromScore(score)),
       lastScoredAt: row.lastScoredAt || null,
       previousScore,
       ...trend,
     }
   })
 }
+
 
 async function loadEvaluations(tenantId, staffId, { fromIso = null } = {}) {
   // tenantQuery prepends tenant as $1 → staffId=$2, from=$3
