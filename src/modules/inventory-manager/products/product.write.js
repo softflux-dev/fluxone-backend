@@ -2076,8 +2076,9 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
             action: 'bundle_top_up',
             entityType: 'product',
             entityId: id,
-            actionText: `Added ${added} additional units to bundle "${displayName}". New stock: ${Math.max(0, Number(payload.quantity) || 0)}.`,
+            actionText: `Added ${added} quantities to bundle "${displayName}".`,
             affectedItem: displayName,
+            details: { addedQuantity: added, newStock: Math.max(0, Number(payload.quantity) || 0) },
           })
         }
       }
@@ -2162,7 +2163,10 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
             'taxIds',
             'taxPercent',
             'scale',
-          ].includes(k) && payload[k] !== undefined,
+          ].includes(k) &&
+          payload[k] !== undefined &&
+          // Forms resend untouched fields (name, subcategoryId…) — only log real changes
+          !(k in existing && String(payload[k] ?? '') === String(existing[k] ?? '')),
       )
       if (editedKeys.length && !becomingInactive) {
         await logProductActivity(client, tenantId, {

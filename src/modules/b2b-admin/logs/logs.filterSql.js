@@ -85,6 +85,7 @@ export function buildAdminLogsListQuery(filters = {}) {
     filters.supplierId || null,
     filters.orderStatus || null,
     filters.ids?.length ? filters.ids : null,
+    filters.variantValueId || null,
   ]
 
   const whereSql = `
@@ -106,7 +107,18 @@ export function buildAdminLogsListQuery(filters = {}) {
         OR COALESCE(al.entity_id, '') ILIKE '%' || $10 || '%'
         OR COALESCE(al.details->>'orderNumber', '') ILIKE '%' || $10 || '%'
       )
-      AND ($11::text IS NULL OR al.entity_id = $11::text)
+      -- A variant parent id also matches its SKU rows (stock logs are written per SKU)
+      AND (
+        $11::text IS NULL
+        OR al.entity_id = $11::text
+        OR EXISTS (
+          SELECT 1
+          FROM products c
+          WHERE c.tenant_id = al.tenant_id
+            AND c.id::text = al.entity_id
+            AND c.parent_id::text = $11::text
+        )
+      )
       AND (
         $12::text IS NULL
         OR (
@@ -117,8 +129,11 @@ export function buildAdminLogsListQuery(filters = {}) {
             WHERE p.tenant_id = al.tenant_id
               AND p.id::text = al.entity_id
               AND (
-                ($12 = 'normal' AND p.type = 'single')
-                OR ($12 = 'variant' AND p.type = 'variant')
+                ($12 = 'normal' AND p.type = 'single' AND p.parent_id IS NULL)
+                OR (
+                  $12 = 'variant'
+                  AND (p.type = 'variant' OR (p.type = 'single' AND p.parent_id IS NOT NULL))
+                )
               )
           )
         )
@@ -127,6 +142,13 @@ export function buildAdminLogsListQuery(filters = {}) {
         $13::uuid IS NULL
         OR (al.entity_type = 'variant_type' AND al.entity_id = $13::text)
         OR (al.details->>'variantTypeId') = $13::text
+        OR EXISTS (
+          SELECT 1
+          FROM product_variant_options o
+          WHERE o.tenant_id = al.tenant_id
+            AND o.product_id::text = al.entity_id
+            AND o.variant_type_id = $13::uuid
+        )
       )
       AND (
         $14::uuid IS NULL
@@ -138,6 +160,16 @@ export function buildAdminLogsListQuery(filters = {}) {
         OR COALESCE(al.details->>'orderStatus', al.details->>'status', '') = $15
       )
       AND ($16::uuid[] IS NULL OR al.id = ANY($16::uuid[]))
+      AND (
+        $17::uuid IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM product_variant_options o
+          WHERE o.tenant_id = al.tenant_id
+            AND o.product_id::text = al.entity_id
+            AND o.variant_value_id = $17::uuid
+        )
+      )
   `
 
   return { params, whereSql, limit, offset, page }
