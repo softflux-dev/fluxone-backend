@@ -5,6 +5,7 @@ import {
   listAdminLogFilterProducts,
   listAdminLogFilterSuppliers,
   listAdminLogFilterVariantTypes,
+  listAdminLogFilterVariantValues,
 } from './logs.filterOptions.model.js'
 import { success } from '../../../utils/response.util.js'
 import { paginatedResult } from '../../../utils/pagination.util.js'
@@ -21,7 +22,7 @@ export async function adminLogActors(req, res) {
 }
 
 export async function adminLogFilterOptions(req, res) {
-  const { branchId, kind, productType } = req.validated.query
+  const { branchId, kind, productType, productId, variantTypeId } = req.validated.query
   let items = []
   if (kind === 'products') {
     items = await listAdminLogFilterProducts(req.tenantId, { branchId, productType })
@@ -30,7 +31,13 @@ export async function adminLogFilterOptions(req, res) {
   } else if (kind === 'suppliers') {
     items = await listAdminLogFilterSuppliers(req.tenantId, { branchId })
   } else if (kind === 'variant_types') {
-    items = await listAdminLogFilterVariantTypes(req.tenantId, { branchId })
+    items = await listAdminLogFilterVariantTypes(req.tenantId, { branchId, productId })
+  } else if (kind === 'variant_values') {
+    items = await listAdminLogFilterVariantValues(req.tenantId, {
+      branchId,
+      productId,
+      variantTypeId,
+    })
   }
   return success(res, { items })
 }

@@ -321,7 +321,13 @@ const OTP_TTL_MIN = 10
 const RESET_TOKEN_TTL_MIN = 10
 const MAX_OTP_ATTEMPTS = 5
 const MAX_OTPS_PER_WINDOW = 5
-const OTP_WINDOW_MIN = 15 // auth.model.js ke INTERVAL '15 minutes' se match hona chahiye
+const OTP_WINDOW_MIN = 15 
+
+const isRealEmail = (value) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
+
+const LOGIN_ID_NOT_ELIGIBLE_MESSAGE =
+  'OTP reset isn’t available for this account. Contact your Branch Manager.'
 
 const otpHash = (userId, otp) =>
   crypto.createHash('sha256').update(`${userId}:${otp}`).digest('hex')
@@ -354,7 +360,18 @@ export async function forgotPassword(req, res) {
       )
     }
 
-    const user = users[0]
+        const user = users[0]
+
+    
+    if (!isRealEmail(user.email)) {
+      return res.status(403).json({
+        success: false,
+        code: 'LOGIN_ID_NOT_ELIGIBLE',
+        message: LOGIN_ID_NOT_ELIGIBLE_MESSAGE,
+        error: { code: 'LOGIN_ID_NOT_ELIGIBLE', message: LOGIN_ID_NOT_ELIGIBLE_MESSAGE },
+      })
+    }
+
     const counts = await getResetCounts(user.id, user.tenantId)
 
     if (counts.recent > 0) {

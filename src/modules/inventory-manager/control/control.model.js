@@ -968,6 +968,25 @@ async function tryAssembleBundleOnStockIn(client, tenantId, event) {
     insertLedgerEventInTx,
   )
 
+  // Bundles tab: same "added quantities" entry as Edit Bundle top-up
+  await writeAdminActivity(
+    tenantId,
+    {
+      branchId,
+      actorUserId: event.createdBy || null,
+      actorName: event.actorName,
+      actorRole: event.actorRole,
+      category: 'bundles',
+      action: 'bundle_top_up',
+      entityType: 'product',
+      entityId: product.id,
+      actionText: `Added ${added} quantities to bundle "${product.name}".`,
+      affectedItem: product.name,
+      details: { addedQuantity: added, newStock: oldQty + added },
+    },
+    client,
+  )
+
   return { handled: true, row }
 }
 

@@ -1208,7 +1208,6 @@ export async function createVariantProduct(tenantId, payload) {
         branchId: payload.branchId,
         actorUserId: payload.createdBy,
         category: 'products',
-        actionText: newOffer,
         action: 'product_create',
         entityType: 'product',
         entityId: parent.id,
@@ -1916,15 +1915,17 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
 
       const isBundle = existing.type === PRODUCT_TYPES.BUNDLE
       const qtyChanging = isBundle && 'quantity' in payload
-      const nextStatus =
+            const nextStatus =
         payload.status !== undefined ? payload.status : existing.status
-      const becomingInactive =
-        isBundle &&
+      // Any product type going active → inactive (drives the audit log)
+      const statusBecomingInactive =
         existing.status !== PRODUCT_STATUS.INACTIVE &&
         nextStatus === PRODUCT_STATUS.INACTIVE
+      // Bundles only: also dissolves remaining finished stock back to components
+      const becomingInactive = isBundle && statusBecomingInactive
 
       // Deactivate → dissolve remaining finished stock back to components
-      if (becomingInactive) {
+             if (becomingInactive) {
         await disassembleBundleFully(client, tenantId, existing, {
           createdBy: payload.createdBy || null,
           scopeBranchId: product.branchId || branchId || null,
@@ -2037,7 +2038,7 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
       const displayName = product.name || existing.name
       const isBundleType = existing.type === PRODUCT_TYPES.BUNDLE
 
-      if (becomingInactive) {
+   if (statusBecomingInactive) {
         await logProductActivity(client, tenantId, {
           branchId: branchIdForLog,
           actorUserId,
@@ -2077,8 +2078,9 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
             action: 'bundle_top_up',
             entityType: 'product',
             entityId: id,
-            actionText: `Added ${added} additional units to bundle "${displayName}". New stock: ${Math.max(0, Number(payload.quantity) || 0)}.`,
+            actionText: `Added ${added} quantities to bundle "${displayName}".`,
             affectedItem: displayName,
+            details: { addedQuantity: added, newStock: Math.max(0, Number(payload.quantity) || 0) },
           })
         }
       }
@@ -2163,9 +2165,12 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
             'taxIds',
             'taxPercent',
             'scale',
-          ].includes(k) && payload[k] !== undefined,
+          ].includes(k) &&
+          payload[k] !== undefined &&
+          // Forms resend untouched fields (name, subcategoryId…) — only log real changes
+          !(k in existing && String(payload[k] ?? '') === String(existing[k] ?? '')),
       )
-      if (editedKeys.length && !becomingInactive) {
+            if (editedKeys.length && !statusBecomingInactive) {
         await logProductActivity(client, tenantId, {
           branchId: branchIdForLog,
           actorUserId,

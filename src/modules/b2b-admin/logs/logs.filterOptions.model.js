@@ -102,21 +102,69 @@ export async function listAdminLogFilterSuppliers(tenantId, { branchId } = {}) {
   return rows
 }
 
-export async function listAdminLogFilterVariantTypes(tenantId, { branchId } = {}) {
+// productId (variant parent) narrows to types / values its SKUs actually use.
+export async function listAdminLogFilterVariantTypes(tenantId, { branchId, productId = null } = {}) {
   if (!branchId) return []
 
   const { rows } = await tenantQuery(
     tenantId,
     `
       SELECT id, name
-      FROM variant_types
-      WHERE tenant_id = $1
-        AND branch_id = $2
-        AND is_active = true
+      FROM variant_types vt
+      WHERE vt.tenant_id = $1
+        AND vt.branch_id = $2
+        AND vt.is_active = true
+        AND (
+          $3::uuid IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM product_variant_options o
+            JOIN products p ON p.id = o.product_id AND p.tenant_id = o.tenant_id
+            WHERE o.tenant_id = vt.tenant_id
+              AND o.variant_type_id = vt.id
+              AND (p.parent_id = $3::uuid OR p.id = $3::uuid)
+          )
+        )
       ORDER BY name
       LIMIT 200
     `,
-    [branchId],
+    [branchId, productId],
+  )
+
+  return rows
+}
+
+export async function listAdminLogFilterVariantValues(
+  tenantId,
+  { branchId, productId = null, variantTypeId = null } = {},
+) {
+  if (!branchId) return []
+
+  const { rows } = await tenantQuery(
+    tenantId,
+    `
+      SELECT DISTINCT vv.id, vv.name
+      FROM variant_values vv
+      JOIN variant_types vt ON vt.id = vv.variant_type_id AND vt.tenant_id = vv.tenant_id
+      WHERE vv.tenant_id = $1
+        AND vt.branch_id = $2
+        AND vv.is_active = true
+        AND ($4::uuid IS NULL OR vv.variant_type_id = $4::uuid)
+        AND (
+          $3::uuid IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM product_variant_options o
+            JOIN products p ON p.id = o.product_id AND p.tenant_id = o.tenant_id
+            WHERE o.tenant_id = vv.tenant_id
+              AND o.variant_value_id = vv.id
+              AND (p.parent_id = $3::uuid OR p.id = $3::uuid)
+          )
+        )
+      ORDER BY vv.name
+      LIMIT 200
+    `,
+    [branchId, productId, variantTypeId],
   )
 
   return rows

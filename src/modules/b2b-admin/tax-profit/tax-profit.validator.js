@@ -2,6 +2,11 @@ import { z } from 'zod'
 import { empty, optionalString, optionalUuid, paginationQuery } from '../../branch-manager/shared.validator.js'
 import { looseUuid, percentField } from '../../../utils/zodFields.util.js'
 
+const dateField = z.preprocess(
+  (v) => (v === '' || v === null ? undefined : v),
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD').optional(),
+)
+
 const sortEnum = z.enum(['all', 'top_sales', 'top_profit', 'slow_moving']).default('all')
 
 export const listTaxProfitQuerySchema = z.object({
@@ -14,6 +19,8 @@ export const listTaxProfitQuerySchema = z.object({
     subcategoryId: optionalUuid,
     productId: optionalUuid,
     variantId: optionalUuid,
+    from: dateField,
+    to: dateField,
     sort: z.preprocess(
       (value) => (value === '' || value === null || value === undefined ? 'all' : value),
       sortEnum,

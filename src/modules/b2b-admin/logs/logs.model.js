@@ -78,7 +78,7 @@ export async function listAdminActivityLogs(tenantId, filters = {}) {
        AND b.tenant_id = al.tenant_id
       ${whereSql}
       ORDER BY al.created_at DESC
-      LIMIT $17 OFFSET $18
+      LIMIT $18 OFFSET $19
     `,
     [...params, limit, offset],
   )
