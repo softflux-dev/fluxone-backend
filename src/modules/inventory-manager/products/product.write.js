@@ -1915,15 +1915,17 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
 
       const isBundle = existing.type === PRODUCT_TYPES.BUNDLE
       const qtyChanging = isBundle && 'quantity' in payload
-      const nextStatus =
+            const nextStatus =
         payload.status !== undefined ? payload.status : existing.status
-      const becomingInactive =
-        isBundle &&
+      // Any product type going active → inactive (drives the audit log)
+      const statusBecomingInactive =
         existing.status !== PRODUCT_STATUS.INACTIVE &&
         nextStatus === PRODUCT_STATUS.INACTIVE
+      // Bundles only: also dissolves remaining finished stock back to components
+      const becomingInactive = isBundle && statusBecomingInactive
 
       // Deactivate → dissolve remaining finished stock back to components
-      if (becomingInactive) {
+             if (becomingInactive) {
         await disassembleBundleFully(client, tenantId, existing, {
           createdBy: payload.createdBy || null,
           scopeBranchId: product.branchId || branchId || null,
@@ -2036,7 +2038,7 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
       const displayName = product.name || existing.name
       const isBundleType = existing.type === PRODUCT_TYPES.BUNDLE
 
-      if (becomingInactive) {
+   if (statusBecomingInactive) {
         await logProductActivity(client, tenantId, {
           branchId: branchIdForLog,
           actorUserId,
@@ -2164,7 +2166,7 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
             'scale',
           ].includes(k) && payload[k] !== undefined,
       )
-      if (editedKeys.length && !becomingInactive) {
+            if (editedKeys.length && !statusBecomingInactive) {
         await logProductActivity(client, tenantId, {
           branchId: branchIdForLog,
           actorUserId,
