@@ -32,6 +32,7 @@ import {
   exportItemsSchema,
   importItemsSchema,
   listCatalogSchema,
+  listOffersSchema,
   productIdParamsSchema,
   scanItemSchema,
   updateCategorySchema,
@@ -43,7 +44,12 @@ const router = Router()
 router.get('/categories', requirePermission('items:read'), asyncHandler(categories))
 router.get('/taxes', requirePermission('items:read'), asyncHandler(taxes))
 router.get('/tax-profit-defaults', requirePermission('items:read'), asyncHandler(taxProfitDefaults))
-router.get('/offers', requirePermission('items:read'), asyncHandler(offers))
+router.get(
+  '/offers',
+  requirePermission('items:read'),
+  validate(listOffersSchema),
+  asyncHandler(offers),
+)
 router.post(
   '/categories',
   requirePermission('items:write'),

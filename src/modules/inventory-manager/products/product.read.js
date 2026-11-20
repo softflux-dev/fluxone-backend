@@ -39,20 +39,32 @@ export async function listTaxes(tenantId) {
 }
 
 // Branch-scoped discount picker for IM product forms (TC-discount-002)
-export async function listOffers(tenantId, { branchId = null } = {}) {
+// Offers with category_id NULL ("All Categories") show for every category;
+// otherwise only offers matching the given category are returned.
+export async function listOffers(tenantId, { branchId = null, categoryId } = {}) {
   const { rows } = await tenantQuery(
     tenantId,
     `
-      SELECT id, name, percent, branch_id AS "branchId"
-      FROM offers
-      WHERE tenant_id = $1
+      SELECT
+        o.id,
+        o.name,
+        o.percent,
+        o.category_id AS "categoryId",
+        o.branch_id AS "branchId",
+        c.name AS "categoryName"
+      FROM offers o
+      LEFT JOIN categories c
+        ON c.id = o.category_id
+       AND c.tenant_id = o.tenant_id
+      WHERE o.tenant_id = $1
         AND (
-          ($2::uuid IS NULL AND branch_id IS NOT NULL)
-          OR branch_id = $2
+          ($2::uuid IS NULL AND o.branch_id IS NOT NULL)
+          OR o.branch_id = $2
         )
-      ORDER BY name
+        AND ($3::uuid IS NULL OR o.category_id = $3)
+      ORDER BY o.name ASC
     `,
-    [branchId],
+    [branchId, categoryId || null],
   )
   return rows
 }

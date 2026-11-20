@@ -18,6 +18,14 @@ export const listCatalogSchema = z.object({
   query: catalogFilters.merge(paginationQuery),
 })
 
+export const listOffersSchema = z.object({
+  body: empty,
+  params: empty,
+  query: z.object({
+    categoryId: optionalLooseUuid,
+  }),
+})
+
 // Category 50 / subcategory 60 — enforced on create and update
 const CATEGORY_NAME_MAX = 50
 const SUBCATEGORY_NAME_MAX = 60
