@@ -28,15 +28,6 @@ function trendFromDelta(delta) {
   return { trendDelta: 0, trendDirection: 'flat' }
 }
 
-function rangeStartIso(range) {
-  const key = String(range || '12M').toUpperCase()
-  if (key === 'ALL') return null
-  const months = key === '3M' ? 3 : key === '6M' ? 6 : 12
-  const d = new Date()
-  d.setUTCMonth(d.getUTCMonth() - months)
-  return d.toISOString()
-}
-
 // Latest scale version for tenant (active scoring definition)
 export async function getActiveScale(tenantId) {
   const { rows: versions } = await tenantQuery(
@@ -528,7 +519,18 @@ async function loadEvaluationItems(tenantId, evaluationIds) {
   return map
 }
 
-async function loadScaleMarkers(tenantId, staffId, fromIso) {
+async function loadScaleMarkers(tenantId, staffId, fromIso, toIso) {
+  const conditions = []
+  const params = [staffId] // tenantQuery prepends tenant as $1 → staffId=$2, fromIso=$3, toIso=$4
+  if (fromIso) {
+    conditions.push(`sv.effective_from >= $${params.length + 2}`)
+    params.push(fromIso)
+  }
+  if (toIso) {
+    conditions.push(`sv.effective_from <= $${params.length + 2}`)
+    params.push(toIso)
+  }
+  const whereExtra = conditions.length ? `AND ${conditions.join(' AND ')}` : ''
   const { rows } = await tenantQuery(
     tenantId,
     `
@@ -545,10 +547,10 @@ async function loadScaleMarkers(tenantId, staffId, fromIso) {
           WHERE pe.tenant_id = sv.tenant_id
             AND pe.staff_id = $2
         )
-        ${fromIso ? 'AND sv.effective_from >= $3' : ''}
+        ${whereExtra}
       ORDER BY sv.effective_from ASC
     `,
-    fromIso ? [staffId, fromIso] : [staffId],
+    params,
   )
   return rows.map((row) => ({
     versionId: row.id,
@@ -588,7 +590,8 @@ export async function getEmployeePerformanceDetail(
   {
     staffId,
     branchId,
-    range = '12M',
+    startDate,
+    endDate,
     timelinePage = 1,
     timelineLimit = 10,
   },
@@ -622,11 +625,16 @@ export async function getEmployeePerformanceDetail(
   if (!staffRows.length) throw httpError(404, 'Staff member not found')
   const employee = staffRows[0]
 
-  const fromIso = rangeStartIso(range)
+  // Inclusive date range [startDate, endDate] for the trend chart.
+  const fromIso = startDate ? `${startDate}T00:00:00.000Z` : null
+  const toIso = endDate ? `${endDate}T23:59:59.999Z` : null
   const allEvals = await loadEvaluations(tenantId, staffId, { fromIso: null })
-  const chartEvals = fromIso
-    ? allEvals.filter((e) => new Date(e.scoredAt) >= new Date(fromIso))
-    : allEvals
+  const chartEvals = allEvals.filter((e) => {
+    const d = new Date(e.scoredAt)
+    if (fromIso && d < new Date(fromIso)) return false
+    if (toIso && d > new Date(toIso)) return false
+    return true
+  })
 
   const allIds = allEvals.map((e) => e.id)
   const itemsByEval = await loadEvaluationItems(tenantId, allIds)
@@ -654,7 +662,7 @@ export async function getEmployeePerformanceDetail(
   const timelineItems = newestFirst.slice((page - 1) * limit, page * limit)
 
   // Scale markers between timeline entries (version changes in range)
-  const scaleMarkers = await loadScaleMarkers(tenantId, staffId, fromIso)
+  const scaleMarkers = await loadScaleMarkers(tenantId, staffId, fromIso, toIso)
 
   const chartPoints = chartEvals.map((ev) => {
     const full = chronological.find((e) => e.id === ev.id)
@@ -716,7 +724,7 @@ export async function getEmployeePerformanceDetail(
       evaluationCount: chronological.length,
     },
     chart: {
-      range: String(range || '12M').toUpperCase(),
+      range: 'Custom',
       points: chartPoints,
       scaleMarkers,
     },
