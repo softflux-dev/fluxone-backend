@@ -1333,6 +1333,52 @@ async function fetchTaxes(tenantId) {
   return rows
 }
 
+// Cloud notification types the POS shows to cashiers. Extend as new BM → cashier notices are added.
+const POS_NOTIFICATION_TYPES = ['holiday_created']
+const POS_NOTIFICATION_BOOTSTRAP_DAYS = 30
+const POS_NOTIFICATION_LIMIT = 200
+
+// Notifications addressed to this branch's BM/cashier users (same user set as fetchBootstrapUsers).
+// Cloud id is the POS idempotency key; the POS never writes read-state back.
+async function fetchBranchNotifications(tenantId, branchId, since = null) {
+  const { rows } = await tenantQuery(
+    tenantId,
+    `
+      SELECT
+        n.id,
+        n.recipient_user_id AS "recipientUserId",
+        n.type,
+        n.title,
+        n.body,
+        n.entity_type AS "entityType",
+        n.entity_id AS "entityId",
+        n.meta,
+        n.is_read AS "isRead",
+        n.created_at AS "createdAt"
+      FROM notifications n
+      JOIN users u ON u.id = n.recipient_user_id AND u.tenant_id = n.tenant_id
+      JOIN roles r ON r.id = u.role_id
+      WHERE n.tenant_id = $1
+        AND u.branch_id = $2
+        AND r.slug IN ($3, $4)
+        AND n.type = ANY ($5::text[])
+        AND n.created_at > COALESCE($6::timestamptz, now() - ($7 || ' days')::interval)
+      ORDER BY n.created_at ASC
+      LIMIT $8
+    `,
+    [
+      branchId,
+      ROLES.BRANCH_MANAGER,
+      ROLES.CASHIER,
+      POS_NOTIFICATION_TYPES,
+      since,
+      String(POS_NOTIFICATION_BOOTSTRAP_DAYS),
+      POS_NOTIFICATION_LIMIT,
+    ],
+  )
+  return rows
+}
+
 async function fetchOffers(tenantId) {
   const { rows } = await tenantQuery(
     tenantId,
@@ -1456,7 +1502,17 @@ function buildCompanyPayload(meta, slipPolicies = []) {
 }
 
 async function buildSnapshotSections(tenantId, branchId, since = null) {
-  const [users, categories, rawProducts, branchInventory, counters, taxes, offers, slipPolicies] =
+  const [
+    users,
+    categories,
+    rawProducts,
+    branchInventory,
+    counters,
+    taxes,
+    offers,
+    slipPolicies,
+    notifications,
+  ] =
     await Promise.all([
       fetchBootstrapUsers(tenantId, branchId, since),
       fetchBootstrapCategories(tenantId, branchId, since),
@@ -1466,12 +1522,14 @@ async function buildSnapshotSections(tenantId, branchId, since = null) {
       fetchTaxes(tenantId),
       fetchOffers(tenantId),
       fetchSlipPolicies(tenantId),
+      fetchBranchNotifications(tenantId, branchId, since),
     ])
 
   const products = await attachProductExtras(tenantId, rawProducts)
 
   return {
     users,
+    notifications,
     categories,
     products,
     taxes,
