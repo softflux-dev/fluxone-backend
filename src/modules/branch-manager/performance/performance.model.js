@@ -28,15 +28,6 @@ function trendFromDelta(delta) {
   return { trendDelta: 0, trendDirection: 'flat' }
 }
 
-function rangeStartIso(range) {
-  const key = String(range || '12M').toUpperCase()
-  if (key === 'ALL') return null
-  const months = key === '3M' ? 3 : key === '6M' ? 6 : 12
-  const d = new Date()
-  d.setUTCMonth(d.getUTCMonth() - months)
-  return d.toISOString()
-}
-
 // Latest scale version for tenant (active scoring definition)
 export async function getActiveScale(tenantId) {
   const { rows: versions } = await tenantQuery(
@@ -111,14 +102,15 @@ function scalesEqual(prevItems, nextItems) {
   return true
 }
 
-// Save full criteria set — creates a new version when anything changed (sum must be 100)
+// Save full criteria set — creates a new version when anything changed.
+// No fixed total required: any positive whole-number maxes are accepted.
 export async function saveScaleVersion(tenantId, { criteria, createdBy }) {
   const list = Array.isArray(criteria) ? criteria : []
   if (!list.length) throw httpError(422, 'At least one criterion is required')
 
   const pointsTotal = list.reduce((sum, row) => sum + Number(row.maxPoints || 0), 0)
-  if (pointsTotal !== 100) {
-    throw httpError(422, `Criteria maximums must add up to exactly 100 (currently ${pointsTotal})`)
+  if (pointsTotal <= 0) {
+    throw httpError(422, `Criteria maximums must total more than 0 (currently ${pointsTotal})`)
   }
 
   return withTransaction(async (client) => {
@@ -283,10 +275,7 @@ export async function createEvaluation(
 
   const active = await getActiveScale(tenantId)
   if (!active.version || !active.criteria.length) {
-    throw httpError(400, 'Configure a scoring scale (maxes must total 100) before evaluating')
-  }
-  if (active.pointsTotal !== 100) {
-    throw httpError(400, 'Active scoring scale must total exactly 100 points')
+    throw httpError(400, 'Configure a scoring scale before evaluating')
   }
 
   const byId = new Map((items || []).map((row) => [row.criterionId, Number(row.points)]))
@@ -383,6 +372,7 @@ export async function createEvaluation(
   })
 }
 
+
 export async function listRoster(tenantId, { branchId, actorUserId }) {
   const { rows } = await tenantQuery(
     tenantId,
@@ -422,7 +412,7 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
       ) p ON true
       WHERE s.tenant_id = $1
         AND s.branch_id = $2
-        AND s.status = 'active'
+        AND (s.status = 'active' OR (s.status = 'inactive' AND l.id IS NOT NULL))
         AND (r.slug IS NULL OR r.slug <> $3)
         AND ($4::uuid IS NULL OR s.user_id IS DISTINCT FROM $4::uuid)
         AND (d.name IS NULL OR d.name !~* 'branch\\s*manager')
@@ -435,9 +425,14 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
   return rows.map((row) => {
     const score = row.score == null ? null : Number(row.score)
     const previousScore = row.previousScore == null ? null : Number(row.previousScore)
+
     const delta =
-      score == null || previousScore == null ? null : round2(score - previousScore)
+      score == null || previousScore == null
+        ? null
+        : round2(score - previousScore)
+
     const trend = trendFromDelta(delta)
+
     return {
       staffId: row.staffId,
       userId: row.userId,
@@ -448,15 +443,19 @@ export async function listRoster(tenantId, { branchId, actorUserId }) {
       designation: row.designation,
       role: row.role,
       status: row.status,
+      canScore: String(row.status || '').toLowerCase() === 'active',
       score,
       rating: score,
-      ratingLabel: row.ratingLabel || (score == null ? null : ratingLabelFromScore(score)),
+      ratingLabel:
+        row.ratingLabel ||
+        (score == null ? null : ratingLabelFromScore(score)),
       lastScoredAt: row.lastScoredAt || null,
       previousScore,
       ...trend,
     }
   })
 }
+
 
 async function loadEvaluations(tenantId, staffId, { fromIso = null } = {}) {
   // tenantQuery prepends tenant as $1 → staffId=$2, from=$3
@@ -528,7 +527,18 @@ async function loadEvaluationItems(tenantId, evaluationIds) {
   return map
 }
 
-async function loadScaleMarkers(tenantId, staffId, fromIso) {
+async function loadScaleMarkers(tenantId, staffId, fromIso, toIso) {
+  const conditions = []
+  const params = [staffId] // tenantQuery prepends tenant as $1 → staffId=$2, fromIso=$3, toIso=$4
+  if (fromIso) {
+    conditions.push(`sv.effective_from >= $${params.length + 2}`)
+    params.push(fromIso)
+  }
+  if (toIso) {
+    conditions.push(`sv.effective_from <= $${params.length + 2}`)
+    params.push(toIso)
+  }
+  const whereExtra = conditions.length ? `AND ${conditions.join(' AND ')}` : ''
   const { rows } = await tenantQuery(
     tenantId,
     `
@@ -545,10 +555,10 @@ async function loadScaleMarkers(tenantId, staffId, fromIso) {
           WHERE pe.tenant_id = sv.tenant_id
             AND pe.staff_id = $2
         )
-        ${fromIso ? 'AND sv.effective_from >= $3' : ''}
+        ${whereExtra}
       ORDER BY sv.effective_from ASC
     `,
-    fromIso ? [staffId, fromIso] : [staffId],
+    params,
   )
   return rows.map((row) => ({
     versionId: row.id,
@@ -588,7 +598,8 @@ export async function getEmployeePerformanceDetail(
   {
     staffId,
     branchId,
-    range = '12M',
+    startDate,
+    endDate,
     timelinePage = 1,
     timelineLimit = 10,
   },
@@ -622,11 +633,16 @@ export async function getEmployeePerformanceDetail(
   if (!staffRows.length) throw httpError(404, 'Staff member not found')
   const employee = staffRows[0]
 
-  const fromIso = rangeStartIso(range)
+  // Inclusive date range [startDate, endDate] for the trend chart.
+  const fromIso = startDate ? `${startDate}T00:00:00.000Z` : null
+  const toIso = endDate ? `${endDate}T23:59:59.999Z` : null
   const allEvals = await loadEvaluations(tenantId, staffId, { fromIso: null })
-  const chartEvals = fromIso
-    ? allEvals.filter((e) => new Date(e.scoredAt) >= new Date(fromIso))
-    : allEvals
+  const chartEvals = allEvals.filter((e) => {
+    const d = new Date(e.scoredAt)
+    if (fromIso && d < new Date(fromIso)) return false
+    if (toIso && d > new Date(toIso)) return false
+    return true
+  })
 
   const allIds = allEvals.map((e) => e.id)
   const itemsByEval = await loadEvaluationItems(tenantId, allIds)
@@ -654,7 +670,7 @@ export async function getEmployeePerformanceDetail(
   const timelineItems = newestFirst.slice((page - 1) * limit, page * limit)
 
   // Scale markers between timeline entries (version changes in range)
-  const scaleMarkers = await loadScaleMarkers(tenantId, staffId, fromIso)
+  const scaleMarkers = await loadScaleMarkers(tenantId, staffId, fromIso, toIso)
 
   const chartPoints = chartEvals.map((ev) => {
     const full = chronological.find((e) => e.id === ev.id)
@@ -716,7 +732,7 @@ export async function getEmployeePerformanceDetail(
       evaluationCount: chronological.length,
     },
     chart: {
-      range: String(range || '12M').toUpperCase(),
+      range: 'Custom',
       points: chartPoints,
       scaleMarkers,
     },

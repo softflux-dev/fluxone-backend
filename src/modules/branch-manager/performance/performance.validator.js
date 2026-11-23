@@ -46,11 +46,22 @@ export const createEvaluationSchema = z.object({
 
 export const employeeDetailSchema = z.object({
   body: empty,
-  query: z.object({
-    range: z.enum(['3M', '6M', '12M', 'All', 'all', '3m', '6m', '12m']).optional(),
-    timelinePage: z.coerce.number().int().min(1).optional(),
-    timelineLimit: z.coerce.number().int().min(1).max(50).optional(),
-  }),
+  query: z
+    .object({
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      timelinePage: z.coerce.number().int().min(1).optional(),
+      timelineLimit: z.coerce.number().int().min(1).max(50).optional(),
+    })
+    .superRefine((query, ctx) => {
+      if (query.startDate && query.endDate && query.endDate < query.startDate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'End date must be on or after start date',
+          path: ['endDate'],
+        })
+      }
+    }),
   params: z.object({
     staffId: z.string().uuid(),
   }),
