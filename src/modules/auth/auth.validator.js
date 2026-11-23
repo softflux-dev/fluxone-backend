@@ -60,7 +60,12 @@ export const updateProfileSchema = z
   .object({
     body: z.object({
       name: z.string().min(1).max(120).optional(),
-      id: z.string().min(3).max(190).optional(),
+     id: z
+  .string()
+  .trim()
+  .max(190)
+  .pipe(z.email('Enter a valid email address'))
+  .optional(),
       password: z.string().min(8).max(72).optional(),
       currentPassword: z.string().min(8).max(72).optional(),
     }),
