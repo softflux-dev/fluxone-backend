@@ -1395,7 +1395,16 @@ async function fetchBranchInventory(tenantId, branchId, since = null) {
       FROM branch_inventory
       WHERE tenant_id = $1
         AND branch_id = $2
-        AND ($3::timestamptz IS NULL OR updated_at > $3::timestamptz)
+        AND (
+          $3::timestamptz IS NULL
+          OR updated_at > $3::timestamptz
+          -- new/edited products must ship their stock even when the inventory row is older
+          OR product_id IN (
+            SELECT p.id FROM products p
+            WHERE p.tenant_id = $1 AND p.branch_id = $2
+              AND (p.created_at > $3::timestamptz OR p.updated_at > $3::timestamptz)
+          )
+        )
       ORDER BY product_id
     `,
     [branchId, since],
