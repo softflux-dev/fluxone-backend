@@ -102,14 +102,15 @@ function scalesEqual(prevItems, nextItems) {
   return true
 }
 
-// Save full criteria set — creates a new version when anything changed (sum must be 100)
+// Save full criteria set — creates a new version when anything changed.
+// No fixed total required: any positive whole-number maxes are accepted.
 export async function saveScaleVersion(tenantId, { criteria, createdBy }) {
   const list = Array.isArray(criteria) ? criteria : []
   if (!list.length) throw httpError(422, 'At least one criterion is required')
 
   const pointsTotal = list.reduce((sum, row) => sum + Number(row.maxPoints || 0), 0)
-  if (pointsTotal !== 100) {
-    throw httpError(422, `Criteria maximums must add up to exactly 100 (currently ${pointsTotal})`)
+  if (pointsTotal <= 0) {
+    throw httpError(422, `Criteria maximums must total more than 0 (currently ${pointsTotal})`)
   }
 
   return withTransaction(async (client) => {
@@ -274,10 +275,7 @@ export async function createEvaluation(
 
   const active = await getActiveScale(tenantId)
   if (!active.version || !active.criteria.length) {
-    throw httpError(400, 'Configure a scoring scale (maxes must total 100) before evaluating')
-  }
-  if (active.pointsTotal !== 100) {
-    throw httpError(400, 'Active scoring scale must total exactly 100 points')
+    throw httpError(400, 'Configure a scoring scale before evaluating')
   }
 
   const byId = new Map((items || []).map((row) => [row.criterionId, Number(row.points)]))
