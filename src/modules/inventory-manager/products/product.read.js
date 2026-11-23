@@ -112,6 +112,7 @@ export async function listProducts(tenantId, filters = {}) {
         p.purchase_price AS "purchasePrice",
         p.selling_price AS "sellingPrice",
         p.discount_percent AS "discountPercent",
+        p.profit_percent AS "profitPercent",
         p.offer_id AS "offerId",
         o.name AS "offerName",
         o.percent AS "offerPercent",
