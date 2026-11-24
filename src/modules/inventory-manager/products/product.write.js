@@ -496,6 +496,44 @@ async function attachBundleItems(client, tenantId, bundleId, bundleItems = [], b
   )
 }
 
+async function validateBundleItemsStock(
+  client,
+  tenantId,
+  branchId,
+  bundleItems = [],
+) {
+  if (!bundleItems.length || !branchId) return
+  const ids = bundleItems.map((item) => item.itemId)
+  const { rows } = await tenantClientQuery(
+    client,
+    tenantId,
+    `
+      SELECT bi.product_id AS "productId",
+             COALESCE(bi.quantity, 0) AS quantity,
+             p.name AS "itemName"
+      FROM products p
+      LEFT JOIN branch_inventory bi
+        ON bi.tenant_id = p.tenant_id
+       AND bi.branch_id = $2
+       AND bi.product_id = p.id
+      WHERE p.tenant_id = $1 AND p.id = ANY($3::uuid[])
+    `,
+    [tenantId, branchId, ids],
+  )
+  const stockById = new Map(rows.map((row) => [String(row.productId), row]))
+  for (const item of bundleItems) {
+    const stock = stockById.get(String(item.itemId))
+    const available = stock ? Number(stock.quantity) || 0 : 0
+    const itemName = stock?.itemName || 'component'
+    if (Number(item.quantity || 0) > available) {
+      throw httpError(
+        400,
+        `Not enough stock for ${itemName}. Available: ${available}`,
+      )
+    }
+  }
+}
+
 // Return remaining finished bundles to component items (deactivate / delete).
 async function disassembleBundleFully(
   client,
@@ -1336,6 +1374,7 @@ export async function createProduct(tenantId, payload) {
       if (isBundle) {
         const bundleItems = payload.bundleItems || []
         await attachBundleItems(client, tenantId, product.id, bundleItems, payload.branchId)
+        await validateBundleItemsStock(client, tenantId, payload.branchId, bundleItems)
         const finishedQty = Math.max(0, Number(payload.quantity) || 0)
         if (finishedQty > 0 || bundleItems.length) {
           await applyBundleAssembleDelta(
@@ -1954,6 +1993,17 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
       } else if (qtyChanging) {
         const oldItems = await loadBundleRecipe(client, tenantId, id)
         const newBundleQty = Math.max(0, Number(payload.quantity) || 0)
+        const oldBundleQty = Number(existing.quantity) || 0
+        // Top-up increases component demand — re-validate the locked recipe
+        // against current branch stock (recipe itself is immutable on edit).
+        if (newBundleQty > oldBundleQty) {
+          await validateBundleItemsStock(
+            client,
+            tenantId,
+            product.branchId || branchId,
+            oldItems,
+          )
+        }
         const bundleName = payload.name || existing.name
         const bundleScale = payload.scale || existing.scale || 'unit'
 
