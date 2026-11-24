@@ -73,6 +73,10 @@ export async function resolveFallbackBranchId(tenantId, preferredBranchId = null
  * business transaction (PG "commands ignored until end of transaction block" → silent rollback).
  */
 export async function writeAdminActivity(tenantId, payload = {}, client = null) {
+    const isStockLog =
+    payload.category === 'stock' || String(payload.action || '').startsWith('stock_')
+  if (client?.skipStockAdminLog && isStockLog) return null
+
   const sp = client ? `admin_log_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}` : null
   try {
     if (client && sp) {
@@ -169,16 +173,23 @@ export function formatStockActionText({
   oldQty,
   orderId,
   orderNumber,
+  reason, 
 }) {
   const item = productLabel(productName, variantLabel)
   const qty = Math.abs(Number(quantity) || 0)
   const total = newTotal != null ? Number(newTotal) : null
   const orderRef = orderNumber || orderId
   const orderSuffix = orderRef ? ` Source: Order Receival ${orderRef}.` : ''
+  const isOpeningStock = String(reason || '').trim().toLowerCase() === 'opening stock'
+  const unitWord = qty === 1 ? 'unit' : 'units'
 
   switch (movementType) {
-    case MOVEMENT_TYPES.IN:
-      return `Added ${qty} units of ${item}. New stock: ${total ?? '—'}.${orderSuffix}`
+        case MOVEMENT_TYPES.IN:
+      if (isOpeningStock && String(variantLabel || '').trim()) {
+        return `Added new variant "${String(variantLabel).trim()}" of "${String(productName || 'Product').trim()}" with ${qty} additional ${unitWord}. New stock: ${total ?? '—'}.`
+      }
+      return `Added ${qty} additional ${unitWord} to "${item}". New stock: ${total ?? '—'}.`
+    
     case MOVEMENT_TYPES.OUT:
       return `Removed ${qty} units of ${item}. New stock: ${total ?? '—'}.`
     case MOVEMENT_TYPES.DAMAGED:

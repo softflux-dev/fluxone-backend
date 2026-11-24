@@ -670,6 +670,7 @@ async function applyOpeningStockInTx(client, tenantId, {
   unitCost,
   branchId,
   createdBy,
+  skipAdminLog = false,
 }) {
   const qty = Math.max(0, Number(quantity) || 0)
   if (qty <= 0) return
@@ -683,6 +684,7 @@ async function applyOpeningStockInTx(client, tenantId, {
     branchId: branchId || null,
     scopeBranchId: branchId || null,
     createdBy: createdBy || null,
+    skipAdminLog,
   })
 }
 
@@ -1126,7 +1128,9 @@ export async function createVariantProduct(tenantId, payload) {
         dailyPriceChange: false,
       })
       await attachTaxes(client, tenantId, parent.id, resolvedTaxIds)
-
+     
+      let totalOpeningStock = 0
+      const stockBreakdown = []
       const children = []
       for (const [index, variant] of variants.entries()) {
         const label = String(variant.label || '').trim()
@@ -1149,6 +1153,8 @@ export async function createVariantProduct(tenantId, payload) {
         const childStatus = variant.status === 'inactive' ? 'inactive' : 'active'
         const openingQty =
           childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
+           totalOpeningStock += openingQty
+          stockBreakdown.push(`${label}: ${openingQty}`)
         const child = await insertProductRow(client, tenantId, {
           branchId: payload.branchId,
           categoryId: payload.categoryId,
@@ -1180,7 +1186,7 @@ export async function createVariantProduct(tenantId, payload) {
         })
 
         await attachTaxes(client, tenantId, child.id, resolvedTaxIds)
-        await attachVariantOptions(
+                await attachVariantOptions(
           client,
           tenantId,
           child.id,
@@ -1188,14 +1194,20 @@ export async function createVariantProduct(tenantId, payload) {
           catalogMap,
           payload.branchId,
         )
-        await applyOpeningStockInTx(client, tenantId, {
-          productId: child.id,
-          quantity: openingQty,
-          scale,
-          unitCost: purchasePrice,
-          branchId: payload.branchId,
-          createdBy: payload.createdBy,
-        })
+
+        client.skipStockAdminLog = true
+        try {
+          await applyOpeningStockInTx(client, tenantId, {
+            productId: child.id,
+            quantity: openingQty,
+            scale,
+            unitCost: purchasePrice,
+            branchId: payload.branchId,
+            createdBy: payload.createdBy,
+          })
+        } finally {
+          client.skipStockAdminLog = false
+        }
 
         children.push({
           ...child,
@@ -1211,8 +1223,7 @@ export async function createVariantProduct(tenantId, payload) {
         action: 'product_create',
         entityType: 'product',
         entityId: parent.id,
-        actionText: `Added new Variant product "${parent.name}" with ${children.length} combination(s).`,
-        affectedItem: parent.name,
+        actionText: `Added new Variant product "${parent.name}" with ${children.length} combination(s) (${stockBreakdown.join(', ')}). Total stock: ${totalOpeningStock} ${totalOpeningStock === 1 ? 'unit' : 'units'}.`,        affectedItem: parent.name,
       })
 
       return {
@@ -1620,8 +1631,8 @@ async function syncVariantChildrenInTx(
         effectiveBranchId,
       )
 
-      const openingQty =
-        childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
+        const openingQty =
+      childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
       await applyOpeningStockInTx(client, tenantId, {
         productId: child.id,
         quantity: openingQty,
@@ -1630,7 +1641,17 @@ async function syncVariantChildrenInTx(
         branchId: effectiveBranchId,
         createdBy,
       })
-
+      
+      await logProductActivity(client, tenantId, {
+        branchId: effectiveBranchId,
+        actorUserId: createdBy,
+        category: 'products',
+        action: 'product_update',
+        entityType: 'product',
+        entityId: parent.id,
+        actionText: `Added new variant "${label}" of "${parentName}".`,
+        affectedItem: `${parentName} (${label})`,
+      })
       children.push({ id: child.id, label, itemCode, barcode })
     }
   }
@@ -2067,24 +2088,23 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
         })
       }
 
-      if (qtyChanging && !becomingInactive) {
-        const added =
-          Math.max(0, Number(payload.quantity) || 0) - (Number(existing.quantity) || 0)
-        if (added > 0) {
-          await logProductActivity(client, tenantId, {
-            branchId: branchIdForLog,
-            actorUserId,
-            category: 'bundles',
-            action: 'bundle_top_up',
-            entityType: 'product',
-            entityId: id,
-            actionText: `Added ${added} quantities to bundle "${displayName}".`,
-            affectedItem: displayName,
-            details: { addedQuantity: added, newStock: Math.max(0, Number(payload.quantity) || 0) },
-          })
-        }
-      }
-
+if (qtyChanging && !becomingInactive) {
+  const newStock = Math.max(0, Number(payload.quantity) || 0)
+  const added = newStock - (Number(existing.quantity) || 0)
+  if (added > 0) {
+    await logProductActivity(client, tenantId, {
+      branchId: branchIdForLog,
+      actorUserId,
+      category: 'bundles',
+      action: 'bundle_top_up',
+      entityType: 'product',
+      entityId: id,
+      actionText: `Added ${added} additional ${added === 1 ? 'unit' : 'units'} to bundle "${displayName}". New stock: ${newStock}.`,
+      affectedItem: displayName,
+      details: { addedQuantity: added, newStock },
+    })
+  }
+}
       const oldSell = Number(existing.sellingPrice)
       const newSell =
         payload.sellingPrice !== undefined ? Number(payload.sellingPrice) : oldSell
