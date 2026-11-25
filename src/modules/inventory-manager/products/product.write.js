@@ -949,6 +949,8 @@ async function attachVariantOptions(
   parts = [],
   catalogMap = null,
   branchId = null,
+  // per-request memo: same type/value repeats across every combination
+  resolved = new Map(),
 ) {
   if (!branchId) throw httpError(422, 'branchId is required to attach variant options')
 
@@ -962,6 +964,25 @@ async function attachVariantOptions(
 
     const typeId = isLooseUuid(part.typeId) ? part.typeId : null
     const valueId = isLooseUuid(part.valueId) ? part.valueId : null
+    const memoKey = [typeId, part.typeName, valueId, part.valueName, part.isCustomType, part.isCustomValue]
+      .map((x) => String(x ?? '').trim().toLowerCase())
+      .join('|')
+    const memo = resolved.get(memoKey)
+    if (memo) {
+      await tenantClientQuery(
+        client,
+        tenantId,
+        `
+          INSERT INTO product_variant_options (
+            tenant_id, product_id, sort_order, variant_type_id, variant_value_id,
+            type_name, value_name, is_custom_type, is_custom_value
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [productId, i, ...memo],
+      )
+      continue
+    }
     const wantsCustomType = Boolean(part.isCustomType) || !typeId
     const wantsCustomValue = Boolean(part.isCustomValue) || !valueId
 
@@ -1065,6 +1086,14 @@ async function attachVariantOptions(
         wantsCustomValue,
       ],
     )
+    resolved.set(memoKey, [
+      resolvedTypeId,
+      resolvedValueId,
+      resolvedTypeName,
+      resolvedValueName,
+      wantsCustomType,
+      wantsCustomValue,
+    ])
   }
 }
 
@@ -1075,6 +1104,7 @@ export async function createVariantProduct(tenantId, payload) {
 
   try {
     const catalogMap = new Map()
+    const optionCache = new Map()
     const created = await withTransaction(async (client) => {
       if (payload.categoryId || payload.subcategoryId) {
         await validateProductCategories(client, tenantId, {
@@ -1187,6 +1217,7 @@ export async function createVariantProduct(tenantId, payload) {
           variant.parts || [],
           catalogMap,
           payload.branchId,
+          optionCache,
         )
         await applyOpeningStockInTx(client, tenantId, {
           productId: child.id,
@@ -1222,7 +1253,8 @@ export async function createVariantProduct(tenantId, payload) {
       }
     })
 
-    await notifyCustomVariantCatalog(tenantId, {
+    // Already committed — notify in the background so slow notifications can't fail or delay the save
+    void notifyCustomVariantCatalog(tenantId, {
       productId: created.id,
       productName: created.name,
       createdBy: payload.createdBy,

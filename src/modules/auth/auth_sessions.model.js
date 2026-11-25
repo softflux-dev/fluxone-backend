@@ -1,5 +1,11 @@
 import { query } from '../../config/db.js'
 
+// Every request re-reads the session + user + role + branch. Cache it briefly:
+// a deactivated user / blocked branch is picked up within SESSION_CACHE_MS,
+// and any revoke clears the cache immediately.
+const SESSION_CACHE_MS = 10_000
+const sessionCache = new Map()
+
 // Create a new opaque session row (token secret is never inserted — only hash).
 export async function createSession({
   id,
@@ -53,6 +59,8 @@ export async function createSession({
 
 // Lookup by token hash + join live user/role/branch for middleware.
 export async function findActiveByTokenHash(tokenHash) {
+  const hit = sessionCache.get(tokenHash)
+  if (hit && hit.at > Date.now() - SESSION_CACHE_MS) return hit.row
   const { rows } = await query(
     `
       SELECT
@@ -83,7 +91,12 @@ export async function findActiveByTokenHash(tokenHash) {
     `,
     [tokenHash],
   )
-  return rows[0] || null
+  const row = rows[0] || null
+  if (row) {
+    if (sessionCache.size > 500) sessionCache.clear()
+    sessionCache.set(tokenHash, { at: Date.now(), row })
+  }
+  return row
 }
 
 // Sliding expiry / last_seen bump.
@@ -108,6 +121,7 @@ export async function touchSession(id, { expiresAt = null, lastSeenAt = new Date
 }
 
 export async function revokeById(id) {
+  sessionCache.clear()
   const { rowCount } = await query(
     `
       UPDATE auth_sessions
@@ -121,6 +135,7 @@ export async function revokeById(id) {
 }
 
 export async function revokeByTokenHash(tokenHash) {
+  sessionCache.clear()
   const { rowCount } = await query(
     `
       UPDATE auth_sessions
@@ -134,6 +149,7 @@ export async function revokeByTokenHash(tokenHash) {
 }
 
 export async function revokeAllForUser(userId, tenantId) {
+  sessionCache.clear()
   const { rowCount } = await query(
     `
       UPDATE auth_sessions
@@ -149,6 +165,7 @@ export async function revokeAllForUser(userId, tenantId) {
 
 // Kill sessions for every user tied to a branch (branch block).
 export async function revokeForBranch(tenantId, branchId) {
+  sessionCache.clear()
   const { rowCount } = await query(
     `
       UPDATE auth_sessions s
