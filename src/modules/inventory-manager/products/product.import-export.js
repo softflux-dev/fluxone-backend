@@ -243,6 +243,9 @@ async function loadBundleComponents(tenantId, bundleId) {
 function emptyExportFields() {
   return {
     rowKind: 'product',
+    itemCode: '',
+    parentItemCode: '',
+    componentItemCode: '',
     importRef: '',
     name: '',
     barcode: '',
@@ -280,6 +283,7 @@ export async function buildProductExportRows(tenantId, { branchId = null } = {})
     `
       SELECT
         p.id,
+        p.item_code AS "itemCode",
         p.name,
         p.barcode,
         p.type,
@@ -339,6 +343,7 @@ export async function buildProductExportRows(tenantId, { branchId = null } = {})
     const base = {
       ...emptyExportFields(),
       rowKind: 'product',
+      itemCode: p.itemCode || '',
       importRef: parentRef,
       name: p.name || '',
       barcode: p.barcode || '',
@@ -366,6 +371,8 @@ export async function buildProductExportRows(tenantId, { branchId = null } = {})
         collected.push({
           ...emptyExportFields(),
           rowKind: 'variant',
+          itemCode: child.itemCode || '',
+          parentItemCode: p.itemCode || '',
           importRef: childRef,
           name: child.name || p.name || '',
           barcode: child.barcode || '',
@@ -396,6 +403,8 @@ export async function buildProductExportRows(tenantId, { branchId = null } = {})
           ...emptyExportFields(),
           rowKind: 'bundle_item',
           name: p.name || '',
+           parentItemCode: p.itemCode || '',
+          componentItemCode: comp.itemCode || '',
           parentRef,
           componentRef: idToRef.get(comp.id) || '',
           componentQty: Number(comp.quantity) || 1,

@@ -61,7 +61,7 @@ export async function listOffers(tenantId, { branchId = null, categoryId } = {})
           ($2::uuid IS NULL AND o.branch_id IS NOT NULL)
           OR o.branch_id = $2
         )
-        AND ($3::uuid IS NULL OR o.category_id = $3)
+        AND ($3::uuid IS NULL OR o.category_id IS NULL OR o.category_id = $3)
       ORDER BY o.name ASC
     `,
     [branchId, categoryId || null],
