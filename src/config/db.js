@@ -16,8 +16,10 @@ const isSupabase =
 export const pool = new Pool({
   connectionString: databaseUrl,
   max: 5,
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 10_000,
+  // A fresh TLS+auth handshake to the remote pooler can take >10s on slow links;
+  // keep warm connections around instead of dropping them every 10s.
+  idleTimeoutMillis: 300_000,
+  connectionTimeoutMillis: 30_000,
   allowExitOnIdle: false,
   keepAlive: true,
   keepAliveInitialDelayMillis: 10_000,
@@ -37,9 +39,18 @@ function startPoolKeepAlive() {
 }
 
 // Prefer pool.query for one-shot reads/writes (avoids manual connect/release).
+// Connect-phase failures never ran the statement, so one retry is safe.
+const isConnectFailure = (e) =>
+  /timeout exceeded when trying to connect|Connection terminated/i.test(e?.message || '')
+
 export async function query(text, params = []) {
   try {
-    return await pool.query(text, params)
+    try {
+      return await pool.query(text, params)
+    } catch (error) {
+      if (!isConnectFailure(error)) throw error
+      return await pool.query(text, params)
+    }
   } catch (error) {
     console.error('Query error:', error)
     throw error
@@ -68,6 +79,13 @@ export async function testConnection(retries = 3, delayMs = 1500) {
 
 export async function withTransaction(work) {
   const client = await pool.connect()
+  let destroy = false
+  // a pooler drop between queries emits 'error' on a checked-out client; unhandled = process crash
+  const onClientError = (err) => {
+    destroy = true
+    console.error('Transaction client error:', err.message)
+  }
+  client.on('error', onClientError)
   try {
     await client.query('BEGIN')
     const result = await work(client)
@@ -79,11 +97,13 @@ export async function withTransaction(work) {
     console.log('Transaction successful:', summary)
     return result
   } catch (error) {
-    await client.query('ROLLBACK')
+    destroy = (await client.query('ROLLBACK').then(() => false, () => true)) || destroy
     console.error('Transaction error:', error)
     throw error
   } finally {
-    client.release()
+    // a dead connection must not go back into the pool
+    if (!destroy) client.removeListener('error', onClientError)
+    client.release(destroy)
   }
 }
 

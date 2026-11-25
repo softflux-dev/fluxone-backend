@@ -97,6 +97,13 @@ export async function hardwareUpdate(req, res) {
     const row = await updateHardware(req.tenantId, id, payload, { branchId })
     if (!row) return fail(res, 'Hardware not found', 404)
     const deviceLabel = row.name || row.code || row.id
+
+    const rawAccessStatus = row.accessStatus ?? row.isActive ?? row.status
+    const newAccessStatus =
+    typeof rawAccessStatus === 'string'
+      ? rawAccessStatus.charAt(0).toUpperCase() + rawAccessStatus.slice(1).toLowerCase()
+      : rawAccessStatus
+
     const statusChanged =
       body.status !== undefined || body.accessStatus !== undefined || body.isActive !== undefined
     await writeAdminActivity(req.tenantId, {
@@ -108,8 +115,8 @@ export async function hardwareUpdate(req, res) {
       entityType: 'hardware',
       entityId: row.id,
       actionText: statusChanged
-        ? `Changed status of device "${deviceLabel}" to ${row.status || row.accessStatus || row.isActive}.`
-        : `Updated device "${deviceLabel}".`,
+  ? `Changed status of device "${deviceLabel}" to ${newAccessStatus}.`
+  : `Updated device "${deviceLabel}".`,
       affectedItem: deviceLabel,
     })
     return success(res, row)

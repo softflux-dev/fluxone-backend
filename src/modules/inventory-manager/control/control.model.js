@@ -658,12 +658,16 @@ export async function getControlSummary(tenantId, filters = {}) {
       SELECT count(*)::int AS "alertCount"
       FROM products p
       ${PRODUCT_FILTER_WHERE}
-        AND EXISTS (
-          SELECT 1 FROM inventory_ledger l
-          WHERE l.tenant_id = p.tenant_id
-            AND l.product_id = p.id
-            AND l.movement_type = 'in'
-        )
+        AND (
+  p.parent_id IS NOT NULL
+  OR EXISTS (
+    SELECT 1
+    FROM inventory_ledger l
+    WHERE l.tenant_id = p.tenant_id
+      AND l.product_id = p.id
+      AND l.movement_type = 'in'
+  )
+)
         AND (
           p.quantity <= 0
           OR (
@@ -966,6 +970,25 @@ async function tryAssembleBundleOnStockIn(client, tenantId, event) {
       },
     },
     insertLedgerEventInTx,
+  )
+
+  // Bundles tab: same "added quantities" entry as Edit Bundle top-up
+  await writeAdminActivity(
+    tenantId,
+    {
+      branchId,
+      actorUserId: event.createdBy || null,
+      actorName: event.actorName,
+      actorRole: event.actorRole,
+      category: 'bundles',
+      action: 'bundle_top_up',
+      entityType: 'product',
+      entityId: product.id,
+      actionText: `Added ${added} quantities to bundle "${product.name}".`,
+      affectedItem: product.name,
+      details: { addedQuantity: added, newStock: oldQty + added },
+    },
+    client,
   )
 
   return { handled: true, row }
@@ -1669,12 +1692,14 @@ export async function listControlAlerts(tenantId, { branchId = null } = {}) {
       LEFT JOIN categories cat ON cat.id = p.category_id AND cat.tenant_id = p.tenant_id
       LEFT JOIN categories sub ON sub.id = p.subcategory_id AND sub.tenant_id = p.tenant_id
       ${SELLABLE_PRODUCT_WHERE}
-        AND EXISTS (
-          SELECT 1
-          FROM inventory_ledger l
-          WHERE l.tenant_id = p.tenant_id
-            AND l.product_id = p.id
-            AND l.movement_type = 'in'
+        AND (
+          p.parent_id IS NOT NULL
+          OR EXISTS (
+            SELECT 1 FROM inventory_ledger l
+            WHERE l.tenant_id = p.tenant_id
+              AND l.product_id = p.id
+              AND l.movement_type = 'in'
+          )
         )
         AND (
           p.quantity <= 0

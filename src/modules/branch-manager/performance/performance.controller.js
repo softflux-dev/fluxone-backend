@@ -83,12 +83,13 @@ export async function getEmployeeDetail(req, res) {
     if (!branchId) {
       return fail(res, 'Performance detail requires a branch assignment', 400)
     }
-    const rangeRaw = req.validated.query.range || '12M'
-    const range = String(rangeRaw).toUpperCase() === 'ALL' ? 'All' : String(rangeRaw).toUpperCase()
+    const startDate = req.validated.query.startDate || undefined
+    const endDate = req.validated.query.endDate || undefined
     const data = await getEmployeePerformanceDetail(req.tenantId, {
       staffId: req.validated.params.staffId,
       branchId,
-      range,
+      startDate,
+      endDate,
       timelinePage: req.validated.query.timelinePage || 1,
       timelineLimit: req.validated.query.timelineLimit || 10,
     })

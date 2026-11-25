@@ -68,6 +68,7 @@ export const listAdminLogsQuerySchema = z.object({
       entityId: optionalUuid,
       productType: optionalProductType,
       variantTypeId: optionalUuid,
+      variantValueId: optionalUuid,
       supplierId: optionalUuid,
       orderStatus: optionalString,
       settingCategory: optionalSettingCategory,
@@ -111,7 +112,9 @@ export const adminLogFilterOptionsQuerySchema = z.object({
   params: empty,
   query: z.object({
     branchId: z.string().uuid(),
-    kind: z.enum(['products', 'bundles', 'suppliers', 'variant_types']),
+    kind: z.enum(['products', 'bundles', 'suppliers', 'variant_types', 'variant_values']),
     productType: optionalProductType,
+    productId: optionalUuid,
+    variantTypeId: optionalUuid,
   }),
 })

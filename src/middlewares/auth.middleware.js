@@ -59,11 +59,15 @@ export async function authMiddleware(req, res, next) {
     req.sessionId = session.id
 
     // Sliding expiry — best-effort; auth still succeeds if touch fails.
-    const nextExpiresAt = computeSlidingExpiresAt(session)
-    touchSession(session.id, {
-      expiresAt: nextExpiresAt,
-      lastSeenAt: new Date(),
-    }).catch(() => {})
+    // Throttled: one UPDATE per session per minute instead of one per request.
+    const lastSeen = session.lastSeenAt ? new Date(session.lastSeenAt).getTime() : 0
+    if (now - lastSeen > 60_000) {
+      session.lastSeenAt = new Date(now)
+      touchSession(session.id, {
+        expiresAt: computeSlidingExpiresAt(session),
+        lastSeenAt: new Date(now),
+      }).catch(() => {})
+    }
 
     next()
   } catch (err) {

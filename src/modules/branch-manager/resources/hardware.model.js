@@ -279,6 +279,27 @@ export async function createHardware(tenantId, payload) {
   assertHardwareType(type)
   assertHardwareStatus(status)
 
+  // Duplicate prevention — same name + company/brand + type
+  // (case/trim-insensitive), scoped to tenant+branch, active records only.
+  const { rows: dupRows } = await tenantQuery(
+    tenantId,
+    `
+      SELECT id
+      FROM branch_hardware
+      WHERE tenant_id = $1
+        AND branch_id = $2
+        AND type = $3
+        AND lower(trim(name)) = lower(trim($4))
+        AND lower(trim(company_name)) = lower(trim($5))
+        AND COALESCE(is_active, true) = true
+      LIMIT 1
+    `,
+    [branchId, type, name, companyName],
+  )
+  if (dupRows[0]) {
+    throw httpError(409, 'Hardware already exists. Duplicate hardware records are not allowed.')
+  }
+
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const code = await nextHardwareCode(tenantId, branchId)
     try {
@@ -332,6 +353,35 @@ export async function updateHardware(tenantId, id, payload, { branchId } = {}) {
   if (!companyName) throw httpError(400, 'Company name is required')
   assertHardwareType(type)
   assertHardwareStatus(status)
+
+  // Duplicate prevention on rename/re-type — another active record with the
+  // same normalized name + company/brand + type (excluding this device).
+  const dupBranchId = branchId || existing.branchId || null
+  const fieldsChanged =
+    name !== existing.name ||
+    companyName !== existing.companyName ||
+    type !== existing.type
+  if (fieldsChanged) {
+    const { rows: updDupRows } = await tenantQuery(
+      tenantId,
+      `
+        SELECT id
+        FROM branch_hardware
+        WHERE tenant_id = $1
+          AND branch_id = $2
+          AND type = $3
+          AND lower(trim(name)) = lower(trim($4))
+          AND lower(trim(company_name)) = lower(trim($5))
+          AND COALESCE(is_active, true) = true
+          AND id <> $6
+        LIMIT 1
+      `,
+      [tenantId, dupBranchId, type, name, companyName, id],
+    )
+    if (updDupRows[0]) {
+      throw httpError(409, 'Hardware already exists. Duplicate hardware records are not allowed.')
+    }
+  }
 
   await tenantQuery(
     tenantId,

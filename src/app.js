@@ -35,7 +35,7 @@ const origin = process.env.CLIENT_ORIGIN || 'http://localhost:5173'
 const isProd = process.env.NODE_ENV === 'production'
 
 const allowedOrigins = new Set(
-  [origin, 'http://localhost:5173', 'http://127.0.0.1:5173']
+  [origin, 'http://localhost:5173', 'http://127.0.0.1:5173' , 'https://staging-fluxone.sprintexa.com']
     .filter(Boolean)
     .flatMap((value) => value.split(',').map((part) => part.trim())),
 )
