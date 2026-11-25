@@ -708,6 +708,7 @@ async function applyOpeningStockInTx(client, tenantId, {
   unitCost,
   branchId,
   createdBy,
+  skipAdminLog = false,
 }) {
   const qty = Math.max(0, Number(quantity) || 0)
   if (qty <= 0) return
@@ -721,6 +722,7 @@ async function applyOpeningStockInTx(client, tenantId, {
     branchId: branchId || null,
     scopeBranchId: branchId || null,
     createdBy: createdBy || null,
+    skipAdminLog,
   })
 }
 
@@ -987,6 +989,8 @@ async function attachVariantOptions(
   parts = [],
   catalogMap = null,
   branchId = null,
+  // per-request memo: same type/value repeats across every combination
+  resolved = new Map(),
 ) {
   if (!branchId) throw httpError(422, 'branchId is required to attach variant options')
 
@@ -1000,6 +1004,25 @@ async function attachVariantOptions(
 
     const typeId = isLooseUuid(part.typeId) ? part.typeId : null
     const valueId = isLooseUuid(part.valueId) ? part.valueId : null
+    const memoKey = [typeId, part.typeName, valueId, part.valueName, part.isCustomType, part.isCustomValue]
+      .map((x) => String(x ?? '').trim().toLowerCase())
+      .join('|')
+    const memo = resolved.get(memoKey)
+    if (memo) {
+      await tenantClientQuery(
+        client,
+        tenantId,
+        `
+          INSERT INTO product_variant_options (
+            tenant_id, product_id, sort_order, variant_type_id, variant_value_id,
+            type_name, value_name, is_custom_type, is_custom_value
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [productId, i, ...memo],
+      )
+      continue
+    }
     const wantsCustomType = Boolean(part.isCustomType) || !typeId
     const wantsCustomValue = Boolean(part.isCustomValue) || !valueId
 
@@ -1103,6 +1126,14 @@ async function attachVariantOptions(
         wantsCustomValue,
       ],
     )
+    resolved.set(memoKey, [
+      resolvedTypeId,
+      resolvedValueId,
+      resolvedTypeName,
+      resolvedValueName,
+      wantsCustomType,
+      wantsCustomValue,
+    ])
   }
 }
 
@@ -1113,6 +1144,7 @@ export async function createVariantProduct(tenantId, payload) {
 
   try {
     const catalogMap = new Map()
+    const optionCache = new Map()
     const created = await withTransaction(async (client) => {
       if (payload.categoryId || payload.subcategoryId) {
         await validateProductCategories(client, tenantId, {
@@ -1164,7 +1196,9 @@ export async function createVariantProduct(tenantId, payload) {
         dailyPriceChange: false,
       })
       await attachTaxes(client, tenantId, parent.id, resolvedTaxIds)
-
+     
+      let totalOpeningStock = 0
+      const stockBreakdown = []
       const children = []
       for (const [index, variant] of variants.entries()) {
         const label = String(variant.label || '').trim()
@@ -1187,6 +1221,8 @@ export async function createVariantProduct(tenantId, payload) {
         const childStatus = variant.status === 'inactive' ? 'inactive' : 'active'
         const openingQty =
           childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
+           totalOpeningStock += openingQty
+          stockBreakdown.push(`${label}: ${openingQty}`)
         const child = await insertProductRow(client, tenantId, {
           branchId: payload.branchId,
           categoryId: payload.categoryId,
@@ -1218,22 +1254,29 @@ export async function createVariantProduct(tenantId, payload) {
         })
 
         await attachTaxes(client, tenantId, child.id, resolvedTaxIds)
-        await attachVariantOptions(
+                await attachVariantOptions(
           client,
           tenantId,
           child.id,
           variant.parts || [],
           catalogMap,
           payload.branchId,
+          optionCache,
         )
-        await applyOpeningStockInTx(client, tenantId, {
-          productId: child.id,
-          quantity: openingQty,
-          scale,
-          unitCost: purchasePrice,
-          branchId: payload.branchId,
-          createdBy: payload.createdBy,
-        })
+
+        client.skipStockAdminLog = true
+        try {
+          await applyOpeningStockInTx(client, tenantId, {
+            productId: child.id,
+            quantity: openingQty,
+            scale,
+            unitCost: purchasePrice,
+            branchId: payload.branchId,
+            createdBy: payload.createdBy,
+          })
+        } finally {
+          client.skipStockAdminLog = false
+        }
 
         children.push({
           ...child,
@@ -1249,8 +1292,7 @@ export async function createVariantProduct(tenantId, payload) {
         action: 'product_create',
         entityType: 'product',
         entityId: parent.id,
-        actionText: `Added new Variant product "${parent.name}" with ${children.length} combination(s).`,
-        affectedItem: parent.name,
+        actionText: `Added new Variant product "${parent.name}" with ${children.length} combination(s) (${stockBreakdown.join(', ')}). Total stock: ${totalOpeningStock} ${totalOpeningStock === 1 ? 'unit' : 'units'}.`,        affectedItem: parent.name,
       })
 
       return {
@@ -1260,7 +1302,8 @@ export async function createVariantProduct(tenantId, payload) {
       }
     })
 
-    await notifyCustomVariantCatalog(tenantId, {
+    // Already committed — notify in the background so slow notifications can't fail or delay the save
+    void notifyCustomVariantCatalog(tenantId, {
       productId: created.id,
       productName: created.name,
       createdBy: payload.createdBy,
@@ -1659,8 +1702,8 @@ async function syncVariantChildrenInTx(
         effectiveBranchId,
       )
 
-      const openingQty =
-        childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
+        const openingQty =
+      childStatus === 'inactive' ? 0 : Math.max(0, Number(variant.quantity) || 0)
       await applyOpeningStockInTx(client, tenantId, {
         productId: child.id,
         quantity: openingQty,
@@ -1669,7 +1712,17 @@ async function syncVariantChildrenInTx(
         branchId: effectiveBranchId,
         createdBy,
       })
-
+      
+      await logProductActivity(client, tenantId, {
+        branchId: effectiveBranchId,
+        actorUserId: createdBy,
+        category: 'products',
+        action: 'product_update',
+        entityType: 'product',
+        entityId: parent.id,
+        actionText: `Added new variant "${label}" of "${parentName}".`,
+        affectedItem: `${parentName} (${label})`,
+      })
       children.push({ id: child.id, label, itemCode, barcode })
     }
   }
@@ -2117,24 +2170,23 @@ export async function updateProduct(tenantId, id, payload, { branchId = null } =
         })
       }
 
-      if (qtyChanging && !becomingInactive) {
-        const added =
-          Math.max(0, Number(payload.quantity) || 0) - (Number(existing.quantity) || 0)
-        if (added > 0) {
-          await logProductActivity(client, tenantId, {
-            branchId: branchIdForLog,
-            actorUserId,
-            category: 'bundles',
-            action: 'bundle_top_up',
-            entityType: 'product',
-            entityId: id,
-            actionText: `Added ${added} quantities to bundle "${displayName}".`,
-            affectedItem: displayName,
-            details: { addedQuantity: added, newStock: Math.max(0, Number(payload.quantity) || 0) },
-          })
-        }
-      }
-
+if (qtyChanging && !becomingInactive) {
+  const newStock = Math.max(0, Number(payload.quantity) || 0)
+  const added = newStock - (Number(existing.quantity) || 0)
+  if (added > 0) {
+    await logProductActivity(client, tenantId, {
+      branchId: branchIdForLog,
+      actorUserId,
+      category: 'bundles',
+      action: 'bundle_top_up',
+      entityType: 'product',
+      entityId: id,
+      actionText: `Added ${added} additional ${added === 1 ? 'unit' : 'units'} to bundle "${displayName}". New stock: ${newStock}.`,
+      affectedItem: displayName,
+      details: { addedQuantity: added, newStock },
+    })
+  }
+}
       const oldSell = Number(existing.sellingPrice)
       const newSell =
         payload.sellingPrice !== undefined ? Number(payload.sellingPrice) : oldSell
