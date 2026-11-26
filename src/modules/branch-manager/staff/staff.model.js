@@ -5,6 +5,7 @@ import {
   CREATABLE_STAFF_ROLE_SQL,
   STAFF_ROLE_TO_DESIGNATION,
 } from './staff.access.js'
+import { assertIdentityAvailable } from '../../../utils/identity.util.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
 import { displayRefSearchHex, normalizeSearchQuery } from '../../../utils/displayRef.util.js'
 import { getBranchHours } from '../../b2b-admin/branches/branches.model.js'
@@ -414,6 +415,11 @@ export async function createStaffUser(tenantId, payload) {
 
   try {
     return await withTransaction(async (client) => {
+      await assertIdentityAvailable((sql, params) => client.query(sql, params), {
+        loginId: payload.email,
+        contactEmail: payload.contactEmail,
+      })
+
       if (roleSlug === ROLES.INVENTORY_MANAGER) {
         await assertSingleInventoryManager(client, tenantId, {
           branchId: payload.branchId,

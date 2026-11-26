@@ -23,6 +23,8 @@ import {
   getTenantName,
   setManagerCredentialsEmailed,
 } from '../../b2b-admin/branches/branches.model.js'
+import { assertIdentityAvailable } from '../../../utils/identity.util.js'
+import { query as dbQuery } from '../../../config/db.js'
 import { sendLoginCredentialsEmail } from '../../../mail/mail.service.js'
 import { loginAppUrl } from '../../../utils/loginUrl.util.js'
 import { ROLE_IDS, ROLES, BCRYPT_COST } from '../../../config/constants.js'
@@ -232,6 +234,16 @@ export async function patchStaff(req, res) {
     const before = await getStaffById(req.tenantId, req.validated.params.id, {
       branchId: bmBranchFilter(req),
     })
+    // Only when the identity actually changes; excludes this user's own row
+    const emailChanged = body.email && body.email.toLowerCase() !== String(before?.email || '').toLowerCase()
+    const contactChanged = contactEmail && contactEmail.toLowerCase() !== String(before?.contactEmail || '').toLowerCase()
+    if (before && (emailChanged || contactChanged)) {
+      await assertIdentityAvailable(dbQuery, {
+        loginId: emailChanged ? body.email : null,
+        contactEmail: contactChanged ? contactEmail : null,
+        excludeUserId: before.userId,
+      })
+    }
     const row = await updateStaff(req.tenantId, req.validated.params.id, body, {
       branchId: bmBranchFilter(req),
     })
