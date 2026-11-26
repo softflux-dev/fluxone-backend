@@ -335,6 +335,7 @@ export async function getProductDetail(tenantId, id, { branchId = null } = {}) {
           c.purchase_price AS "purchasePrice",
           c.selling_price AS "sellingPrice",
           c.discount_percent AS "discountPercent",
+          COALESCE(tax.tax_percent, 0) AS "taxPercent",
           c.offer_id AS "offerId",
           o.name AS "offerName",
           o.percent AS "offerPercent",
@@ -344,6 +345,14 @@ export async function getProductDetail(tenantId, id, { branchId = null } = {}) {
           c.created_at AS "createdAt"
         FROM products c
         LEFT JOIN offers o ON o.id = c.offer_id AND o.tenant_id = c.tenant_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(sum(t.rate_percent), 0) AS tax_percent,
+            array_remove(array_agg(t.name), NULL) AS tax_names
+          FROM product_taxes pt
+          JOIN taxes t ON t.id = pt.tax_id AND t.tenant_id = c.tenant_id
+          WHERE pt.tenant_id = c.tenant_id AND pt.product_id = c.id
+        ) tax ON true
         WHERE c.tenant_id = $1 AND c.parent_id = $2
         ORDER BY c.variant_label ASC NULLS LAST, c.created_at ASC, c.id ASC
       `,

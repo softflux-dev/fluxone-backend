@@ -1,3 +1,12 @@
+import { MAIL_BRAND, emailButton, emailShell, escapeHtml } from './layout.js'
+
+// Credentials email — shared by Branch Manager / Inventory Manager (generated
+// temporary password) and Cashier (password chosen by the BM, ID-based login).
+//
+// mode:
+//   'generated' — server-generated temporary password (BM, IM)
+//   'assigned'  — password set by the Branch Manager at creation (Cashier)
+//   'reset'     — Branch Manager changed the password (Cashier)
 export function buildLoginCredentialsEmail({
   recipientName,
   loginEmail,
@@ -6,60 +15,82 @@ export function buildLoginCredentialsEmail({
   companyName,
   loginUrl,
   roleLabel = 'Branch Manager',
+  mode = 'generated',
+  loginLabel = 'Login email',
 }) {
+  const b = MAIL_BRAND
   const safeName = recipientName || 'there'
-  const subject = `Your ${roleLabel} login — ${companyName || 'FluxOne'}`
+  const where = branchName || 'your branch'
+  const isReset = mode === 'reset'
+  const isGenerated = mode === 'generated'
+  const passwordLabel = isGenerated ? 'Temporary password' : 'Password'
+
+  const subject = isReset
+    ? `Your ${roleLabel} password was updated — ${companyName || 'FluxOne'}`
+    : `Your ${roleLabel} login — ${companyName || 'FluxOne'}`
+
+  const intro = isReset
+    ? `Your Branch Manager updated the password for your ${roleLabel} account at ${where}.`
+    : isGenerated
+      ? `Your ${roleLabel} account for ${where} is ready.`
+      : `Your ${roleLabel} account for ${where} is ready. Your Branch Manager has set your password.`
+
+  const notice = isGenerated
+    ? 'After signing in, open Profile → Edit and set a new password.'
+    : 'Keep this password safe. If you forget it, ask your Branch Manager to reset it — there is no self-service password reset for this account.'
+  const noticeTitle = isGenerated ? 'First-time password.' : 'Need a new password?'
 
   const text = [
     `Hi ${safeName},`,
     '',
-    `Your ${roleLabel} account for ${branchName || 'your branch'} is ready.`,
+    intro,
     '',
-    `Login email: ${loginEmail}`,
-    `Temporary password: ${temporaryPassword}`,
+    `${loginLabel}: ${loginEmail}`,
+    `${passwordLabel}: ${temporaryPassword}`,
     loginUrl ? `Sign in: ${loginUrl}` : null,
     '',
-    'For security, sign in and change this temporary password from your Profile page (Edit → Password).',
+    `${noticeTitle} ${notice}`,
     '',
-    'If you did not expect this email, contact your company admin.',
+    'If you did not expect this email, contact your Branch Manager or company admin.',
     '',
-    `— ${companyName || 'FluxOne Inventory'}`,
+    `— ${companyName || 'FluxOne Management System'}`,
   ]
-    .filter(Boolean)
+    .filter((line) => line !== null)
     .join('\n')
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /><title>${subject}</title></head>
-<body style="font-family:Segoe UI,Arial,sans-serif;line-height:1.5;color:#0f172a;background:#f8fafc;padding:24px;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:28px;border:1px solid #e2e8f0;">
-    <tr><td>
-      <p style="margin:0 0 12px;font-size:14px;color:#64748b;">FluxOne Inventory</p>
-      <h1 style="margin:0 0 16px;font-size:20px;color:#0f172a;">Welcome, ${escapeHtml(safeName)}</h1>
-      <p style="margin:0 0 16px;">Your <strong>${escapeHtml(roleLabel)}</strong> account for <strong>${escapeHtml(branchName || 'your branch')}</strong>${companyName ? ` at <strong>${escapeHtml(companyName)}</strong>` : ''} is ready.</p>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;border-radius:8px;padding:16px;margin:0 0 20px;">
-        <tr><td style="padding:4px 0;font-size:14px;"><strong>Login email</strong><br/>${escapeHtml(loginEmail)}</td></tr>
-        <tr><td style="padding:4px 0;font-size:14px;"><strong>Temporary password</strong><br/><code style="font-size:15px;">${escapeHtml(temporaryPassword)}</code></td></tr>
-      </table>
-      ${
-        loginUrl
-          ? `<p style="margin:0 0 16px;"><a href="${escapeHtml(loginUrl)}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-size:14px;">Sign in</a></p>`
-          : ''
-      }
-      <p style="margin:0 0 8px;font-size:14px;color:#334155;"><strong>Important:</strong> This is a first-time password. After you sign in, open Profile → Edit and set a new password (Password + Confirm Password).</p>
-      <p style="margin:16px 0 0;font-size:12px;color:#94a3b8;">If you did not expect this email, contact your company admin.</p>
-    </td></tr>
-  </table>
-</body>
-</html>`
+  const label = (t) =>
+    `<div style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:${b.muted};">${escapeHtml(t)}</div>`
+
+  const bodyHtml = `
+    <h1 style="margin:0 0 6px;font-size:22px;color:${b.deep};">${isReset ? 'Your password was updated' : `Welcome, ${escapeHtml(safeName)}`}</h1>
+    <p style="margin:0 0 20px;color:#334155;">${isReset ? `Hi ${escapeHtml(safeName)}, your` : 'Your'} <strong>${escapeHtml(roleLabel)}</strong> account ${isReset ? 'at' : 'for'} <strong>${escapeHtml(where)}</strong>${companyName ? ` at <strong>${escapeHtml(companyName)}</strong>` : ''} ${isReset ? 'has a new password set by your Branch Manager.' : isGenerated ? 'is ready. Use the details below to sign in.' : 'is ready. Your Branch Manager has set your password — use the details below to sign in.'}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${b.soft};border-left:4px solid ${b.purple};border-radius:10px;margin:0 0 22px;">
+      <tr><td style="padding:14px 18px 6px;">
+        ${label(loginLabel)}
+        <div style="margin-top:3px;font-size:15px;font-weight:600;color:${b.deep};">${escapeHtml(loginEmail)}</div>
+      </td></tr>
+      <tr><td style="padding:10px 18px 16px;">
+        ${label(passwordLabel)}
+        <div style="margin-top:3px;font-size:18px;font-weight:700;color:${b.deep};font-family:Consolas,Menlo,monospace;letter-spacing:1px;">${escapeHtml(temporaryPassword)}</div>
+      </td></tr>
+    </table>
+    ${loginUrl ? emailButton(loginUrl, 'Sign in to FluxOne') : ''}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
+      <tr><td style="padding:12px 16px;font-size:13px;line-height:1.5;color:#92400e;">
+        <strong>${escapeHtml(noticeTitle)}</strong> ${escapeHtml(notice)}
+      </td></tr>
+    </table>`
+
+  const html = emailShell({
+    title: subject,
+    preheader: isReset
+      ? `Your ${roleLabel} password was updated.`
+      : `Your ${roleLabel} login for ${where} is ready.`,
+    bodyHtml,
+    footerNote:
+      'If you did not expect this email, contact your Branch Manager or company admin. Never share your password with anyone.',
+    companyName,
+  })
 
   return { subject, text, html }
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
 }

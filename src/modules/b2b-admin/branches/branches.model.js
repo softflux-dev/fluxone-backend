@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import dns from 'node:dns/promises'
 import { tenantClientQuery, tenantQuery, withTransaction } from '../../../config/db.js'
 import { ROLE_IDS, ROLES, BRANCH_STATUS } from '../../../config/constants.js'
+import { assertIdentityAvailable } from '../../../utils/identity.util.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
 import {
   displayRefSearchHex,
@@ -283,6 +284,10 @@ export async function createBranchWithManager(tenantId, payload) {
   }
   try {
     return await withTransaction(async (client) => {
+      // login is case-insensitive across the system — never reuse another account's email
+      await assertIdentityAvailable((sql, params) => client.query(sql, params), {
+        loginId: payload.manager?.email,
+      })
       // Omit workingDays → full week (matches migration default)
       const workingDays =
         Array.isArray(payload.workingDays) && payload.workingDays.length

@@ -112,6 +112,13 @@ export async function saveScaleVersion(tenantId, { criteria, createdBy }) {
   if (pointsTotal <= 0) {
     throw httpError(422, `Criteria maximums must total more than 0 (currently ${pointsTotal})`)
   }
+  if (pointsTotal > 100) {
+    throw httpError(
+      422,
+      `Total scoring scale cannot exceed 100 points (currently ${pointsTotal}). ` +
+        'Edit or remove criteria to bring the total to 100 or less.',
+    )
+  }
 
   return withTransaction(async (client) => {
     const active = await getActiveScale(tenantId)

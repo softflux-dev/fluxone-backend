@@ -12,6 +12,7 @@ import {
   updateBranch,
 } from './branches.model.js'
 import { sendLoginCredentialsEmail } from '../../../mail/mail.service.js'
+import { loginAppUrl } from '../../../utils/loginUrl.util.js'
 import { resolveUploadUrl } from '../../../utils/uploadUrl.util.js'
 import { BCRYPT_COST } from '../../../config/constants.js'
 import { fail, success, failFromError } from '../../../utils/response.util.js'
@@ -34,11 +35,6 @@ function normalizeManager(body) {
 
 function uploadedFile(req, fieldName) {
   return req.files?.[fieldName]?.[0] || (fieldName === 'image' ? req.file : null) || null
-}
-
-function loginAppUrl() {
-  const base = (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0].trim()
-  return `${base.replace(/\/$/, '')}/login`
 }
 
 function maybeIncludeTempPassword(temporaryPassword, emailSent) {

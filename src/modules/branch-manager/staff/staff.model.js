@@ -5,6 +5,7 @@ import {
   CREATABLE_STAFF_ROLE_SQL,
   STAFF_ROLE_TO_DESIGNATION,
 } from './staff.access.js'
+import { assertIdentityAvailable } from '../../../utils/identity.util.js'
 import { normalizeImageUrl } from '../../../utils/uploadUrl.util.js'
 import { displayRefSearchHex, normalizeSearchQuery } from '../../../utils/displayRef.util.js'
 import { getBranchHours } from '../../b2b-admin/branches/branches.model.js'
@@ -83,6 +84,7 @@ const staffSelect = `
   s.user_id AS "userId",
   u.full_name AS "fullName",
   u.email,
+  u.contact_email AS "contactEmail",
   u.phone,
   u.is_active AS "isActive",
   r.slug AS role
@@ -376,6 +378,25 @@ async function resolveStaffDesignation(client, tenantId, payload) {
   throw httpError(400, 'designationId, designation, or a valid staff role is required')
 }
 
+// Where credentials are mailed when the login ID is not an email (cashier).
+export async function setStaffContactEmail(tenantId, userId, contactEmail) {
+  await tenantQuery(
+    tenantId,
+    `UPDATE users SET contact_email = $3 WHERE tenant_id = $1 AND id = $2`,
+    [userId, contactEmail || null],
+  )
+}
+
+export async function getBranchName(tenantId, branchId) {
+  if (!branchId) return null
+  const { rows } = await tenantQuery(
+    tenantId,
+    `SELECT name FROM branches WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+    [branchId],
+  )
+  return rows[0]?.name || null
+}
+
 export async function createStaffUser(tenantId, payload) {
   if (!payload.branchId) {
     throw httpError(400, 'branchId is required')
@@ -394,6 +415,11 @@ export async function createStaffUser(tenantId, payload) {
 
   try {
     return await withTransaction(async (client) => {
+      await assertIdentityAvailable((sql, params) => client.query(sql, params), {
+        loginId: payload.email,
+        contactEmail: payload.contactEmail,
+      })
+
       if (roleSlug === ROLES.INVENTORY_MANAGER) {
         await assertSingleInventoryManager(client, tenantId, {
           branchId: payload.branchId,
@@ -425,9 +451,9 @@ export async function createStaffUser(tenantId, payload) {
         tenantId,
         `
           INSERT INTO users (
-            tenant_id, branch_id, role_id, full_name, email, password_hash, phone, is_active
+            tenant_id, branch_id, role_id, full_name, email, password_hash, phone, is_active, contact_email
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           RETURNING id
         `,
         [
@@ -438,6 +464,7 @@ export async function createStaffUser(tenantId, payload) {
           payload.passwordHash,
           payload.phone || null,
           payload.status !== 'inactive' && payload.status !== 'blocked',
+          payload.contactEmail || null,
         ],
       )
 
