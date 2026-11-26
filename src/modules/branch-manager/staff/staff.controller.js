@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import {
   createStaffUser,
   deleteStaff,
+  getBranchName,
   getStaffById,
   listStaff,
   listStaffForExport,
@@ -15,7 +16,14 @@ import {
   sanitizeStaffWritePayload,
 } from './staff.access.js'
 import { validateShiftAgainstBranchHours } from './schedule.validation.js'
-import { getBranchHours } from '../../b2b-admin/branches/branches.model.js'
+import {
+  generateTemporaryPassword,
+  getBranchHours,
+  getTenantName,
+  setManagerCredentialsEmailed,
+} from '../../b2b-admin/branches/branches.model.js'
+import { sendLoginCredentialsEmail } from '../../../mail/mail.service.js'
+import { loginAppUrl } from '../../../utils/loginUrl.util.js'
 import { ROLE_IDS, ROLES, BCRYPT_COST } from '../../../config/constants.js'
 import { fail, success, failFromError } from '../../../utils/response.util.js'
 import { paginatedResult } from '../../../utils/pagination.util.js'
@@ -87,8 +95,12 @@ export async function createStaff(req, res) {
   const hoursError = await rejectIfShiftOutsideBranchHours(res, req.tenantId, branchId, body)
   if (hoursError) return hoursError
 
+  // Inventory Manager: server generates the password and emails it (same flow as Branch Manager)
+  const isInventoryManager = body.role === ROLES.INVENTORY_MANAGER
+  const temporaryPassword = isInventoryManager ? generateTemporaryPassword() : null
+
   try {
-    const passwordHash = await bcrypt.hash(body.password, BCRYPT_COST)
+    const passwordHash = await bcrypt.hash(temporaryPassword || body.password, BCRYPT_COST)
     const created = await createStaffUser(req.tenantId, {
       ...body,
       role: body.role,
@@ -109,7 +121,32 @@ export async function createStaff(req, res) {
       actionText: `Added new employee ${created.fullName} with role ${roleLabel(created.role)}.`,
       affectedItem: created.fullName,
     })
-    return success(res, created, 201)
+    if (!isInventoryManager) return success(res, created, 201)
+
+    const [companyName, branchName] = await Promise.all([
+      getTenantName(req.tenantId),
+      getBranchName(req.tenantId, branchId),
+    ])
+    const mail = await sendLoginCredentialsEmail({
+      recipientName: created.fullName,
+      loginEmail: body.email,
+      temporaryPassword,
+      branchName,
+      companyName,
+      loginUrl: loginAppUrl(),
+      roleLabel: roleLabel(ROLES.INVENTORY_MANAGER),
+    })
+    await setManagerCredentialsEmailed(req.tenantId, created.id, mail.sent)
+    return success(
+      res,
+      {
+        ...created,
+        credentialsEmailed: Boolean(mail.sent),
+        // dev/staging only, and only when delivery failed
+        ...(!mail.sent && process.env.NODE_ENV !== 'production' ? { temporaryPassword } : {}),
+      },
+      201,
+    )
   } catch (err) {
     return failFromError(res, err)
   }

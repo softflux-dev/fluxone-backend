@@ -76,7 +76,8 @@ export const createStaffSchema = z
       fullName: z.string().min(1),
       // Login ID (same field used by /auth/login as `id`).
       email: z.string().min(3).max(190),
-      password: z.string().min(8),
+      // Optional for Inventory Manager — the server generates one and emails it
+      password: z.string().min(8).optional(),
       role: staffRoleEnum,
       designationId: optionalUuid,
       designation: optionalString,
@@ -97,6 +98,14 @@ export const createStaffSchema = z
     params: empty,
   })
   .superRefine(({ body }, ctx) => {
+    if (body.role === 'inventory_manager') {
+      // credentials are emailed, so the login ID must be a real address
+      if (!z.string().email().safeParse(body.email).success) {
+        ctx.addIssue({ code: 'custom', path: ['body', 'email'], message: 'A valid email is required — login credentials are emailed to the Inventory Manager' })
+      }
+    } else if (!body.password) {
+      ctx.addIssue({ code: 'custom', path: ['body', 'password'], message: 'Password is required' })
+    }
     refineStaffSchedule(body, ctx)
     refineCashierHardwareAllocation(body, ctx)
   })

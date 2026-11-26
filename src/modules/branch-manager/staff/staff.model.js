@@ -376,6 +376,16 @@ async function resolveStaffDesignation(client, tenantId, payload) {
   throw httpError(400, 'designationId, designation, or a valid staff role is required')
 }
 
+export async function getBranchName(tenantId, branchId) {
+  if (!branchId) return null
+  const { rows } = await tenantQuery(
+    tenantId,
+    `SELECT name FROM branches WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+    [branchId],
+  )
+  return rows[0]?.name || null
+}
+
 export async function createStaffUser(tenantId, payload) {
   if (!payload.branchId) {
     throw httpError(400, 'branchId is required')
