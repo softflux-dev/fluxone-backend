@@ -116,6 +116,50 @@ export async function notifyInventoryManagersOfStockRequest(
   })
 }
 
+// Daily-price item hit 0 stock → IMs of that branch restock (no price reminder; see D1/D2/D10)
+export async function notifyInventoryManagersOfDailyItemOutOfStock(
+  tenantId,
+  { branchId, productId, productName },
+) {
+  if (!branchId) return []
+  const imIds = await listInventoryManagerIdsForBranch(tenantId, branchId)
+  if (!imIds.length) return []
+  const name = productName || 'A daily price item'
+  return createNotificationsForUsers(tenantId, imIds, {
+    type: 'daily_item_out_of_stock',
+    title: 'Daily Price Item Out of Stock',
+    body: `${name} is out of stock. Please update stock via Control → Stock In.`,
+    linkPath: '/inventory/control',
+    entityType: 'product',
+    entityId: productId,
+    meta: { productId, productName: name, branchId },
+  })
+}
+
+// POS (Local Admin) changed a selling price → IM + BM of that branch are informed (D5/D6, awareness only)
+export async function notifyImAndBmOfPosPriceChange(
+  tenantId,
+  { branchId, productId, productName, oldPrice, newPrice, deviceId, changedBy, changedAt },
+) {
+  if (!branchId) return []
+  const [imIds, bmIds] = await Promise.all([
+    listInventoryManagerIdsForBranch(tenantId, branchId),
+    listBranchManagerIdsForBranch(tenantId, branchId),
+  ])
+  const recipients = [...new Set([...imIds, ...bmIds])]
+  if (!recipients.length) return []
+  const when = changedAt ? new Date(changedAt).toISOString() : new Date().toISOString()
+  return createNotificationsForUsers(tenantId, recipients, {
+    type: 'pos_price_change',
+    title: 'Price Changed From POS',
+    body: `${productName}: ${oldPrice} → ${newPrice}. Changed by ${changedBy || 'POS user'} on ${deviceId || 'unknown device'} at ${when}.`,
+    linkPath: '/inventory/control',
+    entityType: 'product',
+    entityId: productId,
+    meta: { productId, productName, oldPrice, newPrice, deviceId: deviceId || null, changedBy: changedBy || null, changedAt: when, branchId },
+  })
+}
+
 function formatRange(start, end) {
   const opts = { weekday: 'short', month: 'short', day: 'numeric' }
   const a = start ? new Date(start) : null

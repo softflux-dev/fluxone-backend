@@ -90,6 +90,8 @@ export async function withTransaction(work) {
     await client.query('BEGIN')
     const result = await work(client)
     await client.query('COMMIT')
+    // side effects (e.g. notifications) queued via client.afterCommit; never fail the committed tx
+    for (const fn of client.afterCommit || []) await Promise.resolve(fn()).catch((e) => console.error('afterCommit failed:', e.message))
     const summary =
       result && typeof result === 'object' && 'id' in result
         ? { id: result.id, name: result.name, status: result.status }

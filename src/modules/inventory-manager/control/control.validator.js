@@ -71,7 +71,7 @@ export const stockInSchema = z.object({
           scale: optionalScale,
           quantity: z.coerce.number().int().positive(),
           unitCost: z.coerce.number().int().nonnegative().optional(),
-          sellingPrice: z.coerce.number().nonnegative().optional(),
+          sellingPrice: z.coerce.number().positive('Selling price must be greater than zero').optional(),
           expiresAt: z.coerce.date().optional(),
           reason: z.string().min(1).max(2000).optional(),
           // Adjustment dialog stock-in → dual-list on Adjustment tab
@@ -208,7 +208,7 @@ export const thresholdProductParamsSchema = z.object({
 export const updateDailyPriceSchema = z.object({
   body: z.object({
     purchasePrice: z.coerce.number().nonnegative(),
-    sellingPrice: z.coerce.number().nonnegative(),
+    sellingPrice: z.coerce.number().positive('Selling price must be greater than zero'),
   }),
   query: empty,
   params: idParams,
