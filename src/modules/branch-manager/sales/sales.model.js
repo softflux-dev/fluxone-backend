@@ -31,7 +31,15 @@ export async function listSales(tenantId, filters = {}) {
             'quantity', si.quantity,
             'unitPrice', si.unit_price,
             'lineTotal', si.line_total,
-            'isExchange', si.is_exchange
+            'isExchange', si.is_exchange,
+            'priceDispute', (
+              SELECT pc.status FROM pos_price_changes pc
+              WHERE pc.tenant_id = s.tenant_id AND pc.branch_id = s.branch_id
+                AND pc.product_id = si.product_id AND pc.new_price = si.unit_price
+                AND s.sold_at >= pc.changed_at
+                AND (pc.resolved_at IS NULL OR s.sold_at < pc.resolved_at)
+              ORDER BY pc.changed_at DESC LIMIT 1
+            )
           )
         ) FILTER (WHERE si.id IS NOT NULL),
         '[]'
@@ -120,7 +128,11 @@ export async function listSales(tenantId, filters = {}) {
   query += ` GROUP BY s.id ORDER BY s.sold_at DESC`
 
   const { rows } = await tenantQuery(tenantId, query, params)
-  return rows
+  // Sale-level tag: pending | approved | rejected | superseded when any line sold at a disputed POS price
+  return rows.map((r) => ({
+    ...r,
+    priceDispute: (r.items || []).map((i) => i.priceDispute).find(Boolean) || null,
+  }))
 }
 
 export async function refundSale(tenantId, saleId, { branchId = null } = {}) {

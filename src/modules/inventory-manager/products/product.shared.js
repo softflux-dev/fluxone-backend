@@ -21,6 +21,9 @@ export function mapUniqueViolation(err, message = 'Item code or barcode already 
 export function assertSellingGtePurchase(purchasePrice, sellingPrice, label = 'Product') {
   const purchase = Number(purchasePrice) || 0
   const selling = Number(sellingPrice) || 0
+  if (selling <= 0) {
+    throw httpError(422, `${label}: selling price must be greater than zero`)
+  }
   if (selling < purchase) {
     throw httpError(
       422,

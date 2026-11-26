@@ -105,7 +105,7 @@ export const salesPullQuerySchema = z.object({
 
 export const productPricePayloadSchema = z.object({
   productId: idSchema,
-  sellingPrice: z.coerce.number().nonnegative(),
+  sellingPrice: z.coerce.number().positive('Selling price must be greater than zero'),
   discountPercent: z.coerce.number().min(0).max(100).nullish(),
   branchId: optionalGuid,
   currency: optionalString,

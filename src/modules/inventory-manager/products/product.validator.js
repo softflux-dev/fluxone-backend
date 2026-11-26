@@ -257,7 +257,7 @@ export const importItemsSchema = z.object({
           subcategory: z.string().optional(),
           quantity: z.coerce.number().nonnegative().optional(),
           purchasePrice: z.coerce.number().nonnegative().optional(),
-          sellingPrice: z.coerce.number().nonnegative().optional(),
+          sellingPrice: z.coerce.number().positive('Selling price must be greater than zero').optional(),
           reorderPoint: z.coerce.number().nonnegative().optional(),
           description: z.string().optional(),
           discountPercent: z.coerce.number().nonnegative().optional(),
