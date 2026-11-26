@@ -4,7 +4,12 @@
 // Read next: sync.errors.js (codes), sync.mapper.js (POS response shape), docs/SYNC_FLOW.md.
 
 import { tenantClientQuery, tenantQuery, withTransaction } from '../../config/db.js'
-import { notifyImAndBmOfPosPriceChange } from '../notifications/notifications.service.js'
+import {
+  notifyImAndBmOfPosPriceChange,
+  notifyPosPriceSuperseded,
+} from '../notifications/notifications.service.js'
+import { recordPosPriceChange } from '../inventory-manager/pricing-approvals/pricing.model.js'
+import { broadcastSyncRequired } from './syncHub.js'
 import { INVOICE_TYPES, MOVEMENT_TYPES, ROLES, SALE_STATUS } from '../../config/constants.js'
 import { insertLedgerEventInTx } from '../inventory-manager/control/control.model.js'
 import {
@@ -732,6 +737,25 @@ export async function ingestProductPriceUpdate(client, tenantId, syncEvent) {
     const posTs = Date.parse(payload.updatedAt)
     const cloudTs = new Date(product.updatedAt).getTime()
     if (Number.isFinite(posTs) && Number.isFinite(cloudTs) && cloudTs > posTs) {
+      await recordPosPriceChange(client, tenantId, {
+        branchId,
+        productId: product.id,
+        oldPrice: Number(product.sellingPrice),
+        newPrice: payload.sellingPrice,
+        deviceId: payload.deviceId || syncEvent.deviceId || null,
+        clientEventId: syncEvent.clientEventId,
+        changedAt: payload.updatedAt,
+        status: 'superseded',
+      })
+      ;(client.afterCommit ||= []).push(() =>
+        notifyPosPriceSuperseded(tenantId, {
+          branchId,
+          productId: product.id,
+          productName: [product.name, product.variantLabel].filter(Boolean).join(' - '),
+          posPrice: payload.sellingPrice,
+          newPrice: Number(product.sellingPrice),
+        }),
+      )
       return {
         clientEventId: syncEvent.clientEventId,
         skipped: true,
@@ -795,6 +819,18 @@ export async function ingestProductPriceUpdate(client, tenantId, syncEvent) {
       )
       changedBy = u[0]?.name || null
     }
+    await recordPosPriceChange(client, tenantId, {
+      branchId,
+      productId: updated.productId,
+      oldPrice: Number(product.sellingPrice),
+      newPrice: Number(updated.sellingPrice),
+      changedByUserId: payload.updatedByUserId || null,
+      changedByName: changedBy,
+      deviceId: payload.deviceId || syncEvent.deviceId || null,
+      clientEventId: syncEvent.clientEventId,
+      changedAt: payload.updatedAt || updated.updatedAt,
+    })
+    ;(client.afterCommit ||= []).push(() => broadcastSyncRequired(tenantId, branchId, 'price'))
     ;(client.afterCommit ||= []).push(() =>
       notifyImAndBmOfPosPriceChange(tenantId, {
         branchId,

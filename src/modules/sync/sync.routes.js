@@ -5,7 +5,7 @@
 // Do not split this file; do not change /pull behavior (legacy compatibility).
 
 import { Router } from 'express'
-import { bootstrap, delta, events, pull, push, sales } from './sync.controller.js'
+import { bootstrap, delta, events, pull, push, sales, stream } from './sync.controller.js'
 import { asyncHandler } from '../../middlewares/error.middleware.js'
 import { requirePermission } from '../../middlewares/role.middleware.js'
 
@@ -15,6 +15,8 @@ router.post('/push', requirePermission('sync:push'), asyncHandler(push))
 router.get('/bootstrap', requirePermission('sync:pull'), asyncHandler(bootstrap))
 router.get('/delta', requirePermission('sync:pull'), asyncHandler(delta))
 router.get('/sales', requirePermission('sync:pull'), asyncHandler(sales))
+// SSE: server -> POS "sync required" signal (price / stock / daily price changes)
+router.get('/stream', requirePermission('sync:pull'), stream)
 router.get('/events', requirePermission('sync:pull'), asyncHandler(events))
 // Legacy: GET /pull — prefer /bootstrap + /delta for POS catalog. Behavior unchanged.
 // @deprecated Prefer /bootstrap and /delta for POS. Kept for backward compatibility.

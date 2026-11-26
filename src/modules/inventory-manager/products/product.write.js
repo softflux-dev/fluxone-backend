@@ -9,6 +9,8 @@ import {
   insertLedgerEventInTx,
 } from '../control/control.model.js'
 import { notifyBranchManagersOfCustomVariants } from '../../notifications/notifications.service.js'
+import { supersedePendingPriceChanges } from '../pricing-approvals/pricing.model.js'
+import { broadcastSyncRequired } from '../../sync/syncHub.js'
 import {
   applyBundleAssembleDelta,
   loadBundleRecipe,
@@ -2200,6 +2202,15 @@ if (qtyChanging && !becomingInactive) {
       ) {
         const currency = await getTenantCurrencyCode(tenantId)
         if (payload.sellingPrice !== undefined && newSell !== oldSell) {
+          // IM price is newer than any pending POS change (Last Write Wins) + tell POS to sync
+          await supersedePendingPriceChanges(client, tenantId, {
+            productId: id,
+            branchId: existing.branchId || null,
+            newPrice: newSell,
+          })
+          ;(client.afterCommit ||= []).push(() =>
+            broadcastSyncRequired(tenantId, existing.branchId || null, 'price'),
+          )
           await logProductActivity(client, tenantId, {
             branchId: branchIdForLog,
             actorUserId,

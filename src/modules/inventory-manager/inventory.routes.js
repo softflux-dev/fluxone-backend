@@ -6,6 +6,7 @@ import supplierRoutes from './suppliers/supplier.routes.js'
 import purchaseOrderRoutes from './purchase-orders/purchase_order.routes.js'
 import reportRoutes from './reports/report.routes.js'
 import lookupRoutes from './lookups/lookup.routes.js'
+import pricingApprovalRoutes from './pricing-approvals/pricing.routes.js'
 
 const router = Router()
 
@@ -16,5 +17,6 @@ router.use('/suppliers', supplierRoutes)
 router.use('/purchase-orders', purchaseOrderRoutes)
 router.use('/reports', reportRoutes)
 router.use('/lookups', lookupRoutes)
+router.use('/pricing-approvals', pricingApprovalRoutes)
 
 export default router

@@ -1,6 +1,8 @@
 import { tenantClientQuery, tenantQuery, withTransaction } from '../../../config/db.js'
 import { CONTROL_SOURCES, MOVEMENT_TYPES, PRODUCT_TYPES } from '../../../config/constants.js'
 import { notifyInventoryManagersOfDailyItemOutOfStock } from '../../notifications/notifications.service.js'
+import { supersedePendingPriceChanges } from '../pricing-approvals/pricing.model.js'
+import { broadcastSyncRequired } from '../../sync/syncHub.js'
 import {
   applyPriceLayersForMovement,
   shouldKeepExistingStockPrice,
@@ -1098,6 +1100,10 @@ export async function insertLedgerEventInTx(client, tenantId, event) {
   if (event.branchId && event.movementType === MOVEMENT_TYPES.IN && event.posEventId) {
     await adjustBranchInventory(client, tenantId, event.branchId, event.productId, outboundQty)
   }
+  // IM/system stock change → POS sync pop-up (POS's own sales must not ping themselves)
+  if (event.branchId && !event.posEventId) {
+    ;(client.afterCommit ||= []).push(() => broadcastSyncRequired(tenantId, event.branchId, 'stock'))
+  }
 
   const { rows } = await tenantClientQuery(
     client,
@@ -1567,6 +1573,19 @@ export async function updateDailyPrice(
       [productId, purchasePrice ?? null, sellingPrice ?? null, branchId || null],
     )
     const row = rows[0] || null
+    if (row) {
+      // daily price saved: pending POS prices lose (IM is newer) and POS gets a sync signal
+      if (sellingPrice != null && before && Number(before.sellingPrice) !== Number(row.sellingPrice)) {
+        await supersedePendingPriceChanges(client, tenantId, {
+          productId,
+          branchId: row.branchId || branchId,
+          newPrice: row.sellingPrice,
+        })
+      }
+      ;(client.afterCommit ||= []).push(() =>
+        broadcastSyncRequired(tenantId, row.branchId || branchId, 'daily_price'),
+      )
+    }
     if (row && before) {
       const label = row.variantLabel ? `${row.name} (${row.variantLabel})` : row.name
       const currency = await getTenantCurrencyCode(tenantId)

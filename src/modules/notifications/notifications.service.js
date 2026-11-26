@@ -152,11 +152,57 @@ export async function notifyImAndBmOfPosPriceChange(
   return createNotificationsForUsers(tenantId, recipients, {
     type: 'pos_price_change',
     title: 'Price Changed From POS',
-    body: `${productName}: ${oldPrice} → ${newPrice}. Changed by ${changedBy || 'POS user'} on ${deviceId || 'unknown device'} at ${when}.`,
-    linkPath: '/inventory/control',
+    body: `${productName}: ${oldPrice} → ${newPrice}. Changed by ${changedBy || 'POS user'} on ${deviceId || 'unknown device'} at ${when}. Waiting for IM approval.`,
+    linkPath: '/inventory/pricing-approvals',
     entityType: 'product',
     entityId: productId,
     meta: { productId, productName, oldPrice, newPrice, deviceId: deviceId || null, changedBy: changedBy || null, changedAt: when, branchId },
+  })
+}
+
+async function notifyImAndBm(tenantId, branchId, payload) {
+  if (!branchId) return []
+  const [imIds, bmIds] = await Promise.all([
+    listInventoryManagerIdsForBranch(tenantId, branchId),
+    listBranchManagerIdsForBranch(tenantId, branchId),
+  ])
+  const recipients = [...new Set([...imIds, ...bmIds])]
+  if (!recipients.length) return []
+  return createNotificationsForUsers(tenantId, recipients, payload)
+}
+
+// IM approved/rejected POS price changes → IM + BM (sales keep a price-dispute tag in Sales Management)
+export async function notifyPriceApprovalResolved(
+  tenantId,
+  { branchId, productId, productName, status, originalPrice, posPrice },
+) {
+  const approved = status === 'approved'
+  return notifyImAndBm(tenantId, branchId, {
+    type: 'pos_price_resolved',
+    title: approved ? 'POS Price Approved' : 'POS Price Rejected',
+    body: approved
+      ? `${productName}: POS price ${posPrice} approved and now official.`
+      : `${productName}: POS price ${posPrice} rejected. Price reverted to ${originalPrice}. Sales made at ${posPrice} are kept and tagged as price disputes.`,
+    linkPath: '/inventory/pricing-approvals',
+    entityType: 'product',
+    entityId: productId,
+    meta: { productId, productName, status, originalPrice, posPrice, branchId },
+  })
+}
+
+// IM set a newer price than a pending POS change → Last Write Wins, both are informed
+export async function notifyPosPriceSuperseded(
+  tenantId,
+  { branchId, productId, productName, posPrice, newPrice },
+) {
+  return notifyImAndBm(tenantId, branchId, {
+    type: 'pos_price_superseded',
+    title: 'POS Price Overridden',
+    body: `${productName}: POS price ${posPrice} was replaced by the newer price ${newPrice}. Sales made at ${posPrice} stay tagged as price disputes.`,
+    linkPath: '/inventory/pricing-approvals',
+    entityType: 'product',
+    entityId: productId,
+    meta: { productId, productName, posPrice, newPrice, branchId },
   })
 }
 

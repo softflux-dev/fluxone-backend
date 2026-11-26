@@ -4,6 +4,7 @@
 // Read next: sync.model.js (SQL/ingest), sync.access.js (branch lock), docs/SYNC_FLOW.md.
 // /pull is legacy and must keep current behavior (delegates like events today).
 
+import { addSyncClient } from './syncHub.js'
 import {
   buildBootstrapSnapshot,
   buildDeltaSnapshot,
@@ -160,4 +161,10 @@ export async function events(req, res) {
 // @deprecated Use GET /api/sync/bootstrap and /api/sync/delta for POS catalog sync.
 export async function pull(req, res) {
   return events(req, res)
+}
+
+// SSE stream: POS keeps this open; server pushes "sync-required" on price/stock changes.
+export function stream(req, res) {
+  const branchId = resolveSyncPullBranchId(req, req.query.branchId)
+  addSyncClient(req, res, { tenantId: req.tenantId, branchId })
 }
