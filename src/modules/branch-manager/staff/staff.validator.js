@@ -70,13 +70,21 @@ export const exportStaffSchema = z.object({
   query: z.object(staffListFilterQuery),
 })
 
+// Mailbox for credentials (cashier login is an ID, not an email)
+const optionalContactEmail = z.preprocess(
+  (v) => (v === '' || v == null ? undefined : typeof v === 'string' ? v.trim() : v),
+  z.string().email().max(190).optional(),
+)
+
 export const createStaffSchema = z
   .object({
     body: z.object({
       fullName: z.string().min(1),
       // Login ID (same field used by /auth/login as `id`).
       email: z.string().min(3).max(190),
-      password: z.string().min(8),
+      // Optional for Inventory Manager — the server generates one and emails it
+      password: z.string().min(8).optional(),
+      contactEmail: optionalContactEmail,
       role: staffRoleEnum,
       designationId: optionalUuid,
       designation: optionalString,
@@ -97,6 +105,17 @@ export const createStaffSchema = z
     params: empty,
   })
   .superRefine(({ body }, ctx) => {
+    if (body.role === 'inventory_manager') {
+      // credentials are emailed, so the login ID must be a real address
+      if (!z.string().email().safeParse(body.email).success) {
+        ctx.addIssue({ code: 'custom', path: ['body', 'email'], message: 'A valid email is required — login credentials are emailed to the Inventory Manager' })
+      }
+    } else if (body.role === 'cashier' && !body.contactEmail) {
+      ctx.addIssue({ code: 'custom', path: ['body', 'contactEmail'], message: 'Cashier email is required — login credentials are emailed to the cashier' })
+    }
+    if (body.role !== 'inventory_manager' && !body.password) {
+      ctx.addIssue({ code: 'custom', path: ['body', 'password'], message: 'Password is required' })
+    }
     refineStaffSchedule(body, ctx)
     refineCashierHardwareAllocation(body, ctx)
   })
@@ -121,6 +140,7 @@ export const updateStaffSchema = z
       hardwareAllocationStart: optionalTime,
       hardwareAllocationEnd: optionalTime,
       password: z.string().min(8).optional(),
+      contactEmail: optionalContactEmail,
     }),
     query: empty,
     params: idParams,

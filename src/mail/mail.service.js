@@ -65,7 +65,8 @@ async function sendMail({ to, subject, text, html, attachments = [] }) {
 // Send login credentials. Never throws for transport failures — create/reset must not block.
 export async function sendLoginCredentialsEmail(payload) {
   const { subject, text, html } = buildLoginCredentialsEmail(payload)
-  const result = await sendMail({ to: payload.loginEmail, subject, text, html })
+  // Cashiers log in with an ID, so the mailbox (toEmail) differs from the login ID
+  const result = await sendMail({ to: payload.toEmail || payload.loginEmail, subject, text, html })
   if (!result.sent && result.stubbed) {
     console.info('[mail] Stub credentials payload', {
       loginEmail: payload.loginEmail,
@@ -75,7 +76,7 @@ export async function sendLoginCredentialsEmail(payload) {
   }
   if (!result.sent && !result.stubbed) {
     console.info('[mail] Fallback log for manual delivery', {
-      to: payload.loginEmail,
+      to: payload.toEmail || payload.loginEmail,
       loginEmail: payload.loginEmail,
       temporaryPassword: payload.temporaryPassword,
     })
