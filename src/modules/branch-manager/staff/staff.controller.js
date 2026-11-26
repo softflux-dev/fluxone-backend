@@ -5,6 +5,7 @@ import {
   getBranchName,
   getStaffById,
   listStaff,
+  setStaffContactEmail,
   listStaffForExport,
   setStaffStatus,
   updateStaff,
@@ -84,6 +85,30 @@ export async function staffExport(req, res) {
   return success(res, { rows, exported: rows.length })
 }
 
+// Credentials mail for IM (generated password) and cashier (BM-set password).
+async function mailStaffCredentials({ tenantId, created, branchId, role, loginId, toEmail, password, mode }) {
+  const [companyName, branchName] = await Promise.all([
+    getTenantName(tenantId),
+    getBranchName(tenantId, branchId),
+  ])
+  const isCashier = role === ROLES.CASHIER
+  const mail = await sendLoginCredentialsEmail({
+    recipientName: created.fullName,
+    loginEmail: loginId,
+    toEmail,
+    temporaryPassword: password,
+    branchName,
+    companyName,
+    // cashiers sign in with an ID on the POS — no web link
+    loginUrl: isCashier ? undefined : loginAppUrl(),
+    loginLabel: isCashier ? 'Login ID' : 'Login email',
+    roleLabel: roleLabel(role),
+    mode,
+  })
+  await setManagerCredentialsEmailed(tenantId, created.id, mail.sent)
+  return mail
+}
+
 export async function createStaff(req, res) {
   const body = req.validated.body
   const branchId = resolveScopedBranchId(req, body.branchId)
@@ -121,29 +146,29 @@ export async function createStaff(req, res) {
       actionText: `Added new employee ${created.fullName} with role ${roleLabel(created.role)}.`,
       affectedItem: created.fullName,
     })
-    if (!isInventoryManager) return success(res, created, 201)
+    const isCashier = body.role === ROLES.CASHIER
+    if (!isInventoryManager && !isCashier) return success(res, created, 201)
 
-    const [companyName, branchName] = await Promise.all([
-      getTenantName(req.tenantId),
-      getBranchName(req.tenantId, branchId),
-    ])
-    const mail = await sendLoginCredentialsEmail({
-      recipientName: created.fullName,
-      loginEmail: body.email,
-      temporaryPassword,
-      branchName,
-      companyName,
-      loginUrl: loginAppUrl(),
-      roleLabel: roleLabel(ROLES.INVENTORY_MANAGER),
+    // Login stays on users.email (ID for cashier); mail goes to the real mailbox
+    const mail = await mailStaffCredentials({
+      tenantId: req.tenantId,
+      created,
+      branchId,
+      role: body.role,
+      loginId: body.email,
+      toEmail: isCashier ? body.contactEmail : body.email,
+      password: temporaryPassword || body.password,
+      mode: isCashier ? 'assigned' : 'generated',
     })
-    await setManagerCredentialsEmailed(req.tenantId, created.id, mail.sent)
     return success(
       res,
       {
         ...created,
         credentialsEmailed: Boolean(mail.sent),
-        // dev/staging only, and only when delivery failed
-        ...(!mail.sent && process.env.NODE_ENV !== 'production' ? { temporaryPassword } : {}),
+        // dev/staging only, generated passwords only, and only when delivery failed
+        ...(!mail.sent && isInventoryManager && process.env.NODE_ENV !== 'production'
+          ? { temporaryPassword }
+          : {}),
       },
       201,
     )
@@ -162,6 +187,9 @@ export async function staffDetail(req, res) {
 
 export async function patchStaff(req, res) {
   const body = sanitizeStaffWritePayload(req, { ...req.validated.body })
+  const newPassword = body.password
+  const contactEmail = body.contactEmail
+  delete body.contactEmail
   if (body.password) {
     body.passwordHash = await bcrypt.hash(body.password, BCRYPT_COST)
     delete body.password
@@ -234,7 +262,33 @@ export async function patchStaff(req, res) {
         affectedItem: row.fullName,
       })
     }
-    return success(res, row)
+    if (contactEmail !== undefined) await setStaffContactEmail(req.tenantId, row.userId, contactEmail)
+
+    // Cashiers have no forgot-password flow: BM resets here and the new password is emailed.
+    const effectiveRole = row.role || before?.role
+    let credentialsEmailed
+    if (newPassword && effectiveRole === ROLES.CASHIER) {
+      const toEmail = contactEmail || before?.contactEmail
+      if (toEmail) {
+        const mail = await mailStaffCredentials({
+          tenantId: req.tenantId,
+          created: { id: row.userId, fullName: row.fullName },
+          branchId,
+          role: ROLES.CASHIER,
+          loginId: row.email || before?.email,
+          toEmail,
+          password: newPassword,
+          mode: 'reset',
+        })
+        credentialsEmailed = Boolean(mail.sent)
+      } else {
+        credentialsEmailed = false
+      }
+    }
+    return success(
+      res,
+      credentialsEmailed === undefined ? row : { ...row, credentialsEmailed },
+    )
   } catch (err) {
     return failFromError(res, err)
   }
