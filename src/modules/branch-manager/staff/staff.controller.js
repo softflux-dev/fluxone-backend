@@ -33,6 +33,7 @@ import { paginatedResult } from '../../../utils/pagination.util.js'
 import { resolveUploadUrl } from '../../../utils/uploadUrl.util.js'
 import { reallocateStaffHardware } from './hardwareAllocation.model.js'
 import { writeAdminActivity } from '../../../utils/adminActivityLog.util.js'
+import { notifyEmailChanged } from '../../notifications/notifications.service.js'
 
 function roleLabel(role) {
   const map = {
@@ -297,6 +298,28 @@ export async function patchStaff(req, res) {
         credentialsEmailed = false
       }
     }
+
+    // Notify branch BM(s) when an Inventory Manager's email changed.
+    if (emailChanged && effectiveRole === ROLES.INVENTORY_MANAGER) {
+      try {
+        const branchName = await getBranchName(
+          req.tenantId,
+          row.branchId || before?.branchId
+        )
+        await notifyEmailChanged(req.tenantId, {
+          userName: row.fullName || before?.fullName || 'Inventory Manager',
+          role: 'inventory_manager',
+          branchId: row.branchId || before?.branchId,
+          branchName,
+          oldEmail: before?.email,
+          newEmail: row.email,
+          actorUserId: req.user.id,
+        })
+      } catch (notifyErr) {
+        console.error('Inventory Manager email-change notification failed:', notifyErr.message)
+      }
+    }
+
     return success(
       res,
       credentialsEmailed === undefined ? row : { ...row, credentialsEmailed },
