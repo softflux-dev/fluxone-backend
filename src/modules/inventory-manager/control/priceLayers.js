@@ -1,4 +1,6 @@
 import { tenantClientQuery } from '../../../config/db.js'
+import { supersedePendingPriceChanges } from '../pricing-approvals/pricing.model.js'
+import { broadcastSyncRequired } from '../../sync/syncHub.js'
 
 // True = keep the old sell price until that quantity is gone (BM toggle OFF).
 export async function shouldKeepExistingStockPrice(client, tenantId) {
@@ -18,6 +20,7 @@ async function loadProduct(client, tenantId, productId) {
     `
       SELECT
         quantity,
+        branch_id AS "branchId",
         selling_price AS "sellingPrice",
         purchase_price AS "purchasePrice"
       FROM products
@@ -114,7 +117,8 @@ async function rewriteOpenLayers(client, tenantId, productId, sellingPrice, purc
       UPDATE products
       SET
         selling_price = COALESCE($3::numeric, selling_price),
-        purchase_price = COALESCE($4::numeric, purchase_price)
+        purchase_price = COALESCE($4::numeric, purchase_price),
+        updated_at = now()
       WHERE tenant_id = $1 AND id = $2
     `,
     [productId, sellingPrice ?? null, purchasePrice ?? null],
@@ -142,7 +146,8 @@ async function promoteFrontPrice(client, tenantId, productId) {
       UPDATE products
       SET
         selling_price = $3,
-        purchase_price = COALESCE($4::numeric, purchase_price)
+        purchase_price = COALESCE($4::numeric, purchase_price),
+        updated_at = now()
       WHERE tenant_id = $1 AND id = $2
     `,
     [productId, rows[0].sellingPrice, rows[0].purchasePrice],
@@ -197,6 +202,20 @@ async function seedUnlayered(client, tenantId, productId, product, uncovered) {
   )
 }
 
+// Stock-in moved the live selling price: pending POS prices lose (IM is newer) and POS gets a sync signal.
+async function announcePriceChange(client, tenantId, productId, branchId, oldPrice) {
+  const { rows } = await tenantClientQuery(
+    client,
+    tenantId,
+    `SELECT selling_price AS "sellingPrice" FROM products WHERE tenant_id = $1 AND id = $2`,
+    [productId],
+  )
+  const next = rows[0]?.sellingPrice
+  if (next == null || Number(next) === Number(oldPrice)) return
+  await supersedePendingPriceChanges(client, tenantId, { productId, branchId, newPrice: next })
+  ;(client.afterCommit ||= []).push(() => broadcastSyncRequired(tenantId, branchId || null, 'price'))
+}
+
 // delta > 0 adds a lot. delta < 0 sells or removes oldest-priced units first.
 export async function applyPriceLayersForMovement(
   client,
@@ -230,6 +249,7 @@ export async function applyPriceLayersForMovement(
     } else if (previous <= 0) {
       await promoteFrontPrice(client, tenantId, productId)
     }
+    await announcePriceChange(client, tenantId, productId, product.branchId, product.sellingPrice)
     return
   }
 
