@@ -18,6 +18,7 @@ import { BCRYPT_COST } from '../../../config/constants.js'
 import { fail, success, failFromError } from '../../../utils/response.util.js'
 import { paginatedResult } from '../../../utils/pagination.util.js'
 import { writeAdminActivity } from '../../../utils/adminActivityLog.util.js'
+import { notifyEmailChanged } from '../../notifications/notifications.service.js'
 
 function normalizeManager(body) {
   if (body.manager) return body.manager
@@ -138,6 +139,15 @@ export async function patchBranch(req, res) {
   const body = req.validated.body
   const manager = normalizeManager(body)
 
+  // Capture the current manager email before the update so we can detect a change.
+  let existingBranch
+  try {
+    existingBranch = await getBranchById(req.tenantId, req.validated.params.id)
+  } catch {
+    existingBranch = null
+  }
+  const oldManagerEmail = existingBranch?.manager?.email || null
+
   let row
   try {
     const uploadedBranchImage = resolveUploadUrl(uploadedFile(req, 'image'), req)
@@ -176,6 +186,25 @@ export async function patchBranch(req, res) {
     actionText: `Updated branch setting(s) for "${row.name}".`,
     affectedItem: row.name,
   })
+  // Notify tenant admins when the Branch Manager's email changed.
+  try {
+    const newManagerEmail = row.manager?.email || null
+    const norm = (v) => String(v || '').trim().toLowerCase()
+    if (norm(oldManagerEmail) !== norm(newManagerEmail) && norm(newManagerEmail) !== '') {
+      await notifyEmailChanged(req.tenantId, {
+        userName: row.manager?.name || 'Branch Manager',
+        role: 'branch_manager',
+        branchId: row.id,
+        branchName: row.name,
+        oldEmail: oldManagerEmail,
+        newEmail: newManagerEmail,
+        actorUserId: req.user?.id,
+      })
+    }
+  } catch (notifyErr) {
+    console.error('Branch Manager email-change notification failed:', notifyErr.message)
+  }
+
   return success(res, row)
 }
 

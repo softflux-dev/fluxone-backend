@@ -6,6 +6,7 @@ import {
   listInventoryManagerIdsForBranch,
   createNotification,
 } from './notifications.model.js'
+import { ROLES } from '../../config/constants.js'
 
 // BM submitted personal leave → notify all tenant admins
 export async function notifyAdminsOfLeaveRequest(tenantId, leave, { managerName, branchName }) {
@@ -511,6 +512,71 @@ export async function notifyBranchManagersOfCustomVariants(
       creatorName: creator,
       branchId: branchId || null,
       additions: actionable,
+    },
+  })
+}
+
+// Email changed → in-app notification (no email sent).
+// role = branch_manager -> notify all tenant admins.
+// role = inventory_manager -> notify that branch's Branch Manager(s).
+// Other roles: do nothing. The actor is skipped as a recipient.
+export async function notifyEmailChanged(tenantId, {
+  userName,
+  role,
+  branchId,
+  branchName,
+  oldEmail,
+  newEmail,
+  actorUserId,
+} = {}) {
+  const norm = (v) => String(v || '').trim().toLowerCase()
+  const o = norm(oldEmail)
+  const n = norm(newEmail)
+  if (!o || !n || o === n) return []
+
+  let recipientIds
+  let type
+  let title
+  let body
+  let linkPath
+
+  if (role === ROLES.BRANCH_MANAGER) {
+    recipientIds = await listTenantAdminUserIds(tenantId)
+    type = 'branch_manager_email_changed'
+    title = 'Branch Manager email changed'
+    body = `Branch Manager "${userName || 'Branch Manager'}" of branch "${branchName || 'a branch'}" changed their email from ${oldEmail} to ${newEmail}.`
+    linkPath = '/admin/branches'
+  } else if (role === ROLES.INVENTORY_MANAGER) {
+    recipientIds = await listBranchManagerIdsForBranch(tenantId, branchId)
+    type = 'inventory_manager_email_changed'
+    title = 'Inventory Manager email changed'
+    body = `Inventory Manager "${userName || 'Inventory Manager'}" changed their email from ${oldEmail} to ${newEmail}.`
+    linkPath = '/branch/staff'
+  } else {
+    return []
+  }
+
+  if (!recipientIds || !recipientIds.length) return []
+
+  // Skip the actor as a recipient.
+  const filtered = actorUserId ? recipientIds.filter((id) => id !== actorUserId) : recipientIds
+  if (!filtered.length) return []
+
+  return createNotificationsForUsers(tenantId, filtered, {
+    type,
+    title,
+    body,
+    linkPath,
+    entityType: null,
+    entityId: null,
+    meta: {
+      userName,
+      role,
+      branchId: branchId || null,
+      branchName: branchName || null,
+      oldEmail,
+      newEmail,
+      actorUserId: actorUserId || null,
     },
   })
 }

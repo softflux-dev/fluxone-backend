@@ -106,11 +106,17 @@ export async function listStockOut(req, res) {
   try {
     const { tenantId, branchId } = resolveInventoryScope(req)
     const { ledgerKind, ...query } = req.validated.query
-    const movementTypes = ledgerKind ? [ledgerKind] : STOCK_OUT_LEDGER_TYPES
+    const movementTypes =
+      ledgerKind === 'sale'
+        ? [MOVEMENT_TYPES.OUT]
+        : ledgerKind
+          ? [ledgerKind]
+          : STOCK_OUT_LEDGER_TYPES
     const result = await listLedger(tenantId, {
       ...query,
       movementTypes,
       branchId,
+      posEventIdNotNull: ledgerKind === 'sale',
     })
     return success(res, paginatedResult(result.items, result))
   } catch (err) {
@@ -123,9 +129,12 @@ export async function listAdjustmentLedger(req, res) {
   try {
     const { tenantId, branchId } = resolveInventoryScope(req)
     const { ledgerKind, ...query } = req.validated.query
-    const movementTypes = ledgerKind
-      ? [ledgerKind]
-      : [...ADJUSTMENT_LEDGER_TYPES, MOVEMENT_TYPES.IN]
+    const movementTypes =
+      ledgerKind === 'stock_in'
+        ? [MOVEMENT_TYPES.IN]
+        : ledgerKind
+          ? [ledgerKind]
+          : [...ADJUSTMENT_LEDGER_TYPES, MOVEMENT_TYPES.IN]
     const result = await listLedger(tenantId, {
       ...query,
       movementTypes,
@@ -336,22 +345,32 @@ export async function exportControl(req, res) {
     // Export scope mirrors each tab's list (Adjustment / Stock Out dual display)
     let filters
     if (movementType === MOVEMENT_TYPES.ADJUSTMENT) {
-      const movementTypes = ledgerKind
-        ? [ledgerKind]
-        : [...ADJUSTMENT_LEDGER_TYPES, MOVEMENT_TYPES.IN]
+      const movementTypes =
+        ledgerKind === 'stock_in'
+          ? [MOVEMENT_TYPES.IN]
+          : ledgerKind
+            ? [ledgerKind]
+            : [...ADJUSTMENT_LEDGER_TYPES, MOVEMENT_TYPES.IN]
       filters = {
         ...rest,
         branchId,
         movementTypes,
         controlSourceForIn: CONTROL_SOURCES.ADJUSTMENT,
+        posEventIdNotNull: false,
       }
       delete filters.movementType
     } else if (movementType === MOVEMENT_TYPES.OUT) {
-      const movementTypes = ledgerKind ? [ledgerKind] : STOCK_OUT_LEDGER_TYPES
+      const movementTypes =
+        ledgerKind === 'sale'
+          ? [MOVEMENT_TYPES.OUT]
+          : ledgerKind
+            ? [ledgerKind]
+            : STOCK_OUT_LEDGER_TYPES
       filters = {
         ...rest,
         branchId,
         movementTypes,
+        posEventIdNotNull: ledgerKind === 'sale',
       }
       delete filters.movementType
     } else {

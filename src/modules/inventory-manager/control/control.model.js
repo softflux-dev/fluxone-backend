@@ -554,6 +554,8 @@ const LEDGER_LIST_WHERE = `
     )
     -- When set (Adjustment tab), only include stock-in rows tagged from Adjustment dialog
     AND ($15::text IS NULL OR l.movement_type <> 'in' OR l.control_source = $15)
+    -- Sale filter: only POS-origin out movements
+    AND ($16::boolean IS NOT TRUE OR l.pos_event_id IS NOT NULL)
 `
 
 function ledgerFilterParams(filters = {}, overrides = {}) {
@@ -577,6 +579,10 @@ function ledgerFilterParams(filters = {}, overrides = {}) {
     ? overrides.controlSourceForIn
     : filters.controlSourceForIn || null
 
+  const posEventIdNotNull = Object.prototype.hasOwnProperty.call(overrides, 'posEventIdNotNull')
+    ? overrides.posEventIdNotNull
+    : filters.posEventIdNotNull || null
+
   return [
     types,
     filters.q || null,
@@ -592,6 +598,7 @@ function ledgerFilterParams(filters = {}, overrides = {}) {
     filters.variantTypeId || null,
     filters.variantValueId || null,
     controlSourceForIn,
+    posEventIdNotNull,
   ]
 }
 
@@ -890,7 +897,7 @@ export async function listLedger(tenantId, filters = {}) {
       LEFT JOIN users du ON du.id = l.damaged_by_user_id AND du.tenant_id = l.tenant_id
       ${LEDGER_LIST_WHERE}
       ORDER BY l.created_at DESC
-      LIMIT $16 OFFSET $17
+      LIMIT $17 OFFSET $18
     `,
     [...filterParams, limit, offset],
   )

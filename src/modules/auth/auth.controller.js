@@ -37,6 +37,7 @@ import {
   isLoginLocked,
   recordLoginFailure,
 } from '../../services/authLockout.service.js'
+import { notifyEmailChanged } from '../notifications/notifications.service.js'
 
 function publicUser(user) {
   return {
@@ -227,9 +228,13 @@ export async function updateMe(req, res) {
     return fail(res, 'name, id, password, or image is required', 422)
   }
 
+  // Capture the current email before any self-profile update so we can detect a change.
+  const existingUser = await findAuthUserById(req.user.id, req.tenantId)
+  const oldEmail = existingUser?.email || null
+
   try {
     if (newPassword) {
-      const existing = await findAuthUserById(req.user.id, req.tenantId)
+      const existing = existingUser
       if (!existing) return fail(res, 'User not found', 404)
       if (!currentPassword) {
         return fail(res, 'Current password is required to set a new password', 422)
@@ -264,6 +269,26 @@ export async function updateMe(req, res) {
 
   const user = await findAuthUserById(req.user.id, req.tenantId)
   if (!user) return fail(res, 'User not found', 404)
+
+  // Notify when the user's own email changed (BM -> tenant admins; IM -> branch BMs).
+  try {
+    const newEmail = user.email || null
+    const norm = (v) => String(v || '').trim().toLowerCase()
+    if (norm(oldEmail) !== norm(newEmail) && norm(newEmail) !== '') {
+      await notifyEmailChanged(req.tenantId, {
+        userName: user.fullName,
+        role: user.role,
+        branchId: user.branchId,
+        branchName: user.branchName,
+        oldEmail,
+        newEmail,
+        actorUserId: req.user.id,
+      })
+    }
+  } catch (notifyErr) {
+    console.error('Self-profile email-change notification failed:', notifyErr.message)
+  }
+
   return success(res, {
     ...publicUser(user),
     passwordUpdated: Boolean(newPassword),

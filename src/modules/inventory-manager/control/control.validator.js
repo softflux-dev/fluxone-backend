@@ -27,7 +27,7 @@ const optionalScale = z.preprocess(
   z.string().min(1).optional(),
 )
 
-const ledgerKindEnum = z.enum(['adjustment', 'damaged', 'expired', 'other'])
+const ledgerKindEnum = z.enum(['adjustment', 'damaged', 'expired', 'other', 'sale', 'stock_in'])
 
 export const listLedgerSchema = z.object({
   body: empty,
